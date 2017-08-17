@@ -1,24 +1,24 @@
-/*
- The MIT License (MIT)
- 
- Copyright (c) 2013-2015 SRS(ossrs)
- 
- Permission is hereby granted, free of charge, to any person obtaining a copy of
- this software and associated documentation files (the "Software"), to deal in
- the Software without restriction, including without limitation the rights to
- use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
- the Software, and to permit persons to whom the Software is furnished to do so,
- subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in all
- copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
- FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
- COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
- IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+/**
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2013-2017 OSSRS(winlin)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include <srs_app_kafka.hpp>
@@ -40,7 +40,6 @@ using namespace std;
 
 #ifdef SRS_AUTO_KAFKA
 
-#define SRS_KAKFA_CYCLE_INTERVAL_MS 3000
 #define SRS_KAFKA_PRODUCER_TIMEOUT 30000
 #define SRS_KAFKA_PRODUCER_AGGREGATE_SIZE 1
 
@@ -135,14 +134,13 @@ SrsKafkaPartition::SrsKafkaPartition()
     id = broker = 0;
     port = SRS_CONSTS_KAFKA_DEFAULT_PORT;
     
-    transport = new SrsTcpClient();
-    kafka = new SrsKafkaClient(transport);
+    transport = NULL;
+    kafka = NULL;
 }
 
 SrsKafkaPartition::~SrsKafkaPartition()
 {
-    srs_freep(kafka);
-    srs_freep(transport);
+    disconnect();
 }
 
 string SrsKafkaPartition::hostport()
@@ -158,13 +156,15 @@ int SrsKafkaPartition::connect()
 {
     int ret = ERROR_SUCCESS;
     
-    if (transport->connected()) {
+    if (transport) {
         return ret;
     }
+    transport = new SrsTcpClient(host, port, SRS_KAFKA_PRODUCER_TIMEOUT);
+    kafka = new SrsKafkaClient(transport);
     
-    int64_t timeout = SRS_KAFKA_PRODUCER_TIMEOUT * 1000;
-    if ((ret = transport->connect(host, port, timeout)) != ERROR_SUCCESS) {
-        srs_error("connect to %s partition=%d failed, timeout=%"PRId64". ret=%d", hostport().c_str(), id, timeout, ret);
+    if ((ret = transport->connect()) != ERROR_SUCCESS) {
+        disconnect();
+        srs_error("connect to %s partition=%d failed. ret=%d", hostport().c_str(), id, ret);
         return ret;
     }
     
@@ -176,6 +176,12 @@ int SrsKafkaPartition::connect()
 int SrsKafkaPartition::flush(SrsKafkaPartitionCache* pc)
 {
     return kafka->write_messages(topic, id, *pc);
+}
+
+void SrsKafkaPartition::disconnect()
+{
+    srs_freep(kafka);
+    srs_freep(transport);
 }
 
 SrsKafkaMessage::SrsKafkaMessage(SrsKafkaProducer* p, int k, SrsJsonObject* j)
@@ -321,13 +327,47 @@ ISrsKafkaCluster::~ISrsKafkaCluster()
 {
 }
 
+// @global kafka event producer, user must use srs_initialize_kafka to initialize it.
+ISrsKafkaCluster* _srs_kafka = NULL;
+
+srs_error_t srs_initialize_kafka()
+{
+    srs_error_t err = srs_success;
+    
+    SrsKafkaProducer* kafka = new SrsKafkaProducer();
+    _srs_kafka = kafka;
+    
+    if ((err = kafka->initialize()) != srs_success) {
+        return srs_error_wrap(err, "initialize kafka producer");
+    }
+    
+    if ((err = kafka->start()) != srs_success) {
+        return srs_error_wrap(err, "start kafka producer");
+    }
+    
+    return err;
+}
+
+void srs_dispose_kafka()
+{
+    SrsKafkaProducer* kafka = dynamic_cast<SrsKafkaProducer*>(_srs_kafka);
+    if (!kafka) {
+        return;
+    }
+    
+    kafka->stop();
+    
+    srs_freep(kafka);
+    _srs_kafka = NULL;
+}
+
 SrsKafkaProducer::SrsKafkaProducer()
 {
     metadata_ok = false;
-    metadata_expired = st_cond_new();
+    metadata_expired = srs_cond_new();
     
-    lock = st_mutex_new();
-    pthread = new SrsReusableThread("kafka", this, SRS_KAKFA_CYCLE_INTERVAL_MS * 1000);
+    lock = srs_mutex_new();
+    trd = new SrsDummyCoroutine();
     worker = new SrsAsyncCallWorker();
     cache = new SrsKafkaCache();
     
@@ -341,44 +381,50 @@ SrsKafkaProducer::~SrsKafkaProducer()
     srs_freep(lb);
     
     srs_freep(worker);
-    srs_freep(pthread);
+    srs_freep(trd);
     srs_freep(cache);
     
-    st_mutex_destroy(lock);
-    st_cond_destroy(metadata_expired);
+    srs_mutex_destroy(lock);
+    srs_cond_destroy(metadata_expired);
 }
 
-int SrsKafkaProducer::initialize()
+srs_error_t SrsKafkaProducer::initialize()
 {
-    int ret = ERROR_SUCCESS;
-    
     enabled = _srs_config->get_kafka_enabled();
     srs_info("initialize kafka ok, enabled=%d.", enabled);
-    
-    return ret;
+    return srs_success;
 }
 
-int SrsKafkaProducer::start()
+srs_error_t SrsKafkaProducer::start()
 {
-    int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
-    if ((ret = worker->start()) != ERROR_SUCCESS) {
-        srs_error("start kafka worker failed. ret=%d", ret);
-        return ret;
+    if (!enabled) {
+        return err;
     }
     
-    if ((ret = pthread->start()) != ERROR_SUCCESS) {
-        srs_error("start kafka thread failed. ret=%d", ret);
+    if ((err = worker->start()) != srs_success) {
+        return srs_error_wrap(err, "async worker");
+    }
+    
+    srs_freep(trd);
+    trd = new SrsSTCoroutine("kafka", this, _srs_context->get_id());
+    if ((err = trd->start()) != srs_success) {
+        return srs_error_wrap(err, "coroutine");
     }
     
     refresh_metadata();
     
-    return ret;
+    return err;
 }
 
 void SrsKafkaProducer::stop()
 {
-    pthread->stop();
+    if (!enabled) {
+        return;
+    }
+    
+    trd->stop();
     worker->stop();
 }
 
@@ -400,14 +446,12 @@ int SrsKafkaProducer::send(int key, SrsJsonObject* obj)
     }
     
     // sync with backgound metadata worker.
-    st_mutex_lock(lock);
+    SrsLocker(lock);
     
     // flush message when metadata is ok.
     if (metadata_ok) {
         ret = flush();
     }
-    
-    st_mutex_unlock(lock);
     
     return ret;
 }
@@ -444,36 +488,35 @@ int SrsKafkaProducer::on_close(int key)
     return worker->execute(new SrsKafkaMessage(this, key, obj));
 }
 
-int SrsKafkaProducer::cycle()
-{
-    int ret = ERROR_SUCCESS;
-    
-    if ((ret = do_cycle()) != ERROR_SUCCESS) {
-        srs_warn("ignore kafka error. ret=%d", ret);
-    }
-    
-    return ret;
-}
+#define SRS_KAKFA_CIMS 3000
 
-int SrsKafkaProducer::on_before_cycle()
+srs_error_t SrsKafkaProducer::cycle()
 {
+    srs_error_t err = srs_success;
+    
     // wait for the metadata expired.
     // when metadata is ok, wait for it expired.
     if (metadata_ok) {
-        st_cond_wait(metadata_expired);
+        srs_cond_wait(metadata_expired);
     }
     
     // request to lock to acquire the socket.
-    st_mutex_lock(lock);
+    SrsLocker(lock);
     
-    return ERROR_SUCCESS;
-}
-
-int SrsKafkaProducer::on_end_cycle()
-{
-    st_mutex_unlock(lock);
- 
-    return ERROR_SUCCESS;
+    while (true) {
+        if ((err = do_cycle()) != srs_success) {
+            srs_warn("KafkaProducer: Ignore error, %s", srs_error_desc(err).c_str());
+            srs_freep(err);
+        }
+        
+        if ((err = trd->pull()) != srs_success) {
+            return srs_error_wrap(err, "kafka cycle");
+        }
+    
+        srs_usleep(SRS_KAKFA_CIMS * 1000);
+    }
+    
+    return err;
 }
 
 void SrsKafkaProducer::clear_metadata()
@@ -488,22 +531,22 @@ void SrsKafkaProducer::clear_metadata()
     partitions.clear();
 }
 
-int SrsKafkaProducer::do_cycle()
+srs_error_t SrsKafkaProducer::do_cycle()
 {
     int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
     // ignore when disabled.
     if (!enabled) {
-        return ret;
+        return err;
     }
     
     // when kafka enabled, request metadata when startup.
     if ((ret = request_metadata()) != ERROR_SUCCESS) {
-        srs_error("request kafka metadata failed. ret=%d", ret);
-        return ret;
+        return srs_error_new(ret, "request metadata");
     }
     
-    return ret;
+    return err;
 }
 
 int SrsKafkaProducer::request_metadata()
@@ -522,12 +565,6 @@ int SrsKafkaProducer::request_metadata()
         return ret;
     }
     
-    SrsTcpClient* transport = new SrsTcpClient();
-    SrsAutoFree(SrsTcpClient, transport);
-    
-    SrsKafkaClient* kafka = new SrsKafkaClient(transport);
-    SrsAutoFree(SrsKafkaClient, kafka);
-    
     std::string server;
     int port = SRS_CONSTS_KAFKA_DEFAULT_PORT;
     if (true) {
@@ -544,8 +581,14 @@ int SrsKafkaProducer::request_metadata()
                   senabled.c_str(), sbrokers.c_str(), lb->current(), server.c_str(), port, topic.c_str());
     }
     
+    SrsTcpClient* transport = new SrsTcpClient(server, port, SRS_CONSTS_KAFKA_TMMS);
+    SrsAutoFree(SrsTcpClient, transport);
+    
+    SrsKafkaClient* kafka = new SrsKafkaClient(transport);
+    SrsAutoFree(SrsKafkaClient, kafka);
+    
     // reconnect to kafka server.
-    if ((ret = transport->connect(server, port, SRS_CONSTS_KAFKA_TIMEOUT_US)) != ERROR_SUCCESS) {
+    if ((ret = transport->connect()) != ERROR_SUCCESS) {
         srs_error("kafka connect %s:%d failed. ret=%d", server.c_str(), port, ret);
         return ret;
     }
@@ -589,7 +632,7 @@ void SrsKafkaProducer::refresh_metadata()
     clear_metadata();
     
     metadata_ok = false;
-    st_cond_signal(metadata_expired);
+    srs_cond_signal(metadata_expired);
     srs_trace("kafka async refresh metadata in background");
 }
 

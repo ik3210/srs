@@ -1,25 +1,25 @@
-/*
-The MIT License (MIT)
-
-Copyright (c) 2013-2015 SRS(ossrs)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
+/**
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2013-2017 OSSRS(winlin)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
 #include <srs_app_ingest.hpp>
 
@@ -36,10 +36,6 @@ using namespace std;
 #include <srs_kernel_utility.hpp>
 #include <srs_app_utility.hpp>
 #include <srs_protocol_utility.hpp>
-
-// when error, ingester sleep for a while and retry.
-// ingest never sleep a long time, for we must start the stream ASAP.
-#define SRS_AUTO_INGESTER_SLEEP_US (int64_t)(3*1000*1000LL)
 
 SrsIngesterFFMPEG::SrsIngesterFFMPEG()
 {
@@ -109,7 +105,7 @@ SrsIngester::SrsIngester()
     
     expired = false;
     
-    pthread = new SrsReusableThread("ingest", this, SRS_AUTO_INGESTER_SLEEP_US);
+    trd = new SrsDummyCoroutine();
     pprint = SrsPithyPrint::create_ingester();
 }
 
@@ -117,7 +113,7 @@ SrsIngester::~SrsIngester()
 {
     _srs_config->unsubscribe(this);
     
-    srs_freep(pthread);
+    srs_freep(trd);
     clear_engines();
 }
 
@@ -130,32 +126,33 @@ void SrsIngester::dispose()
     stop();
 }
 
-int SrsIngester::start()
+srs_error_t SrsIngester::start()
 {
     int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
     if ((ret = parse()) != ERROR_SUCCESS) {
         clear_engines();
-        ret = ERROR_SUCCESS;
-        return ret;
+        return srs_error_new(ret, "parse");
     }
     
     // even no ingesters, we must also start it,
     // for the reload may add more ingesters.
     
     // start thread to run all encoding engines.
-    if ((ret = pthread->start()) != ERROR_SUCCESS) {
-        srs_error("st_thread_create failed. ret=%d", ret);
-        return ret;
-    }
-    srs_trace("ingest thread cid=%d, current_cid=%d", pthread->cid(), _srs_context->get_id());
+    srs_freep(trd);
+    trd = new SrsSTCoroutine("ingest", this, _srs_context->get_id());
     
-    return ret;
+    if ((err = trd->start()) != srs_success) {
+        return srs_error_wrap(err, "start coroutine");
+    }
+    
+    return err;
 }
 
 void SrsIngester::stop()
 {
-    pthread->stop();
+    trd->stop();
     clear_engines();
 }
 
@@ -172,9 +169,34 @@ void SrsIngester::fast_stop()
     }
 }
 
-int SrsIngester::cycle()
+// when error, ingester sleep for a while and retry.
+// ingest never sleep a long time, for we must start the stream ASAP.
+#define SRS_AUTO_INGESTER_CIMS (3000)
+
+srs_error_t SrsIngester::cycle()
+{
+    srs_error_t err = srs_success;
+    
+    while (true) {
+        if ((err = do_cycle()) != srs_success) {
+            srs_warn("Ingester: Ignore error, %s", srs_error_desc(err).c_str());
+            srs_freep(err);
+        }
+        
+        if ((err = trd->pull()) != srs_success) {
+            return srs_error_wrap(err, "ingester");
+        }
+    
+        srs_usleep(SRS_AUTO_INGESTER_CIMS * 1000);
+    }
+    
+    return err;
+}
+
+srs_error_t SrsIngester::do_cycle()
 {
     int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
     // when expired, restart all ingesters.
     if (expired) {
@@ -186,7 +208,7 @@ int SrsIngester::cycle()
         
         // re-prase the ingesters.
         if ((ret = parse()) != ERROR_SUCCESS) {
-            return ret;
+            return srs_error_new(ret, "parse");
         }
     }
     
@@ -197,25 +219,19 @@ int SrsIngester::cycle()
         
         // start all ffmpegs.
         if ((ret = ingester->start()) != ERROR_SUCCESS) {
-            srs_error("ingest ffmpeg start failed. ret=%d", ret);
-            return ret;
+            return srs_error_new(ret, "ingester start");
         }
-
+        
         // check ffmpeg status.
         if ((ret = ingester->cycle()) != ERROR_SUCCESS) {
-            srs_error("ingest ffmpeg cycle failed. ret=%d", ret);
-            return ret;
+            return srs_error_new(ret, "ingester cycle");
         }
     }
-
+    
     // pithy print
     show_ingest_log_message();
     
-    return ret;
-}
-
-void SrsIngester::on_thread_stop()
-{
+    return err;
 }
 
 void SrsIngester::clear_engines()
@@ -226,7 +242,7 @@ void SrsIngester::clear_engines()
         SrsIngesterFFMPEG* ingester = *it;
         srs_freep(ingester);
     }
-
+    
     ingesters.clear();
 }
 
@@ -251,6 +267,11 @@ int SrsIngester::parse()
 int SrsIngester::parse_ingesters(SrsConfDirective* vhost)
 {
     int ret = ERROR_SUCCESS;
+    
+    // when vhost disabled, ignore any ingesters.
+    if (!_srs_config->get_vhost_enabled(vhost)) {
+        return ret;
+    }
     
     std::vector<SrsConfDirective*> ingesters = _srs_config->get_ingesters(vhost->arg0());
     
@@ -385,7 +406,7 @@ int SrsIngester::initialize_ffmpeg(SrsFFMPEG* ffmpeg, SrsConfDirective* vhost, S
         srs_trace("empty intput type, ingest=%s. ret=%d", ingest->arg0().c_str(), ret);
         return ret;
     }
-
+    
     if (srs_config_ingest_is_file(input_type)) {
         std::string input_url = _srs_config->get_ingest_input_url(ingest);
         if (input_url.empty()) {
@@ -396,7 +417,7 @@ int SrsIngester::initialize_ffmpeg(SrsFFMPEG* ffmpeg, SrsConfDirective* vhost, S
         
         // for file, set re.
         ffmpeg->set_iparams("-re");
-    
+        
         if ((ret = ffmpeg->initialize(input_url, output, log_file)) != ERROR_SUCCESS) {
             return ret;
         }
@@ -410,14 +431,14 @@ int SrsIngester::initialize_ffmpeg(SrsFFMPEG* ffmpeg, SrsConfDirective* vhost, S
         
         // for stream, no re.
         ffmpeg->set_iparams("");
-    
+        
         if ((ret = ffmpeg->initialize(input_url, output, log_file)) != ERROR_SUCCESS) {
             return ret;
         }
     } else {
         ret = ERROR_ENCODER_INPUT_TYPE;
-        srs_error("invalid ingest=%s type=%s, ret=%d", 
-            ingest->arg0().c_str(), input_type.c_str(), ret);
+        srs_error("invalid ingest=%s type=%s, ret=%d",
+                  ingest->arg0().c_str(), input_type.c_str(), ret);
     }
     
     // set output format to flv for RTMP
@@ -437,8 +458,8 @@ int SrsIngester::initialize_ffmpeg(SrsFFMPEG* ffmpeg, SrsConfDirective* vhost, S
         }
     }
     
-    srs_trace("parse success, ingest=%s, vhost=%s", 
-        ingest->arg0().c_str(), vhost->arg0().c_str());
+    srs_trace("parse success, ingest=%s, vhost=%s",
+              ingest->arg0().c_str(), vhost->arg0().c_str());
     
     return ret;
 }
@@ -446,7 +467,7 @@ int SrsIngester::initialize_ffmpeg(SrsFFMPEG* ffmpeg, SrsConfDirective* vhost, S
 void SrsIngester::show_ingest_log_message()
 {
     pprint->elapse();
-
+    
     if ((int)ingesters.size() <= 0) {
         return;
     }
@@ -457,8 +478,8 @@ void SrsIngester::show_ingest_log_message()
     
     // reportable
     if (pprint->can_print()) {
-        srs_trace("-> "SRS_CONSTS_LOG_INGESTER" time=%"PRId64", ingesters=%d, #%d(alive=%ds, %s)",
-            pprint->age(), (int)ingesters.size(), index, ingester->alive() / 1000, ingester->uri().c_str());
+        srs_trace("-> " SRS_CONSTS_LOG_INGESTER " time=%" PRId64 ", ingesters=%d, #%d(alive=%ds, %s)",
+                  pprint->age(), (int)ingesters.size(), index, ingester->alive() / 1000, ingester->uri().c_str());
     }
 }
 
@@ -480,13 +501,13 @@ int SrsIngester::on_reload_vhost_removed(string vhost)
         ingester->stop();
         
         srs_trace("reload stop ingester, vhost=%s, id=%s", vhost.c_str(), ingester->uri().c_str());
-            
+        
         srs_freep(ingester);
         
         // remove the item from ingesters.
         it = ingesters.erase(it);
     }
-
+    
     return ret;
 }
 
@@ -522,7 +543,7 @@ int SrsIngester::on_reload_ingest_removed(string vhost, string ingest_id)
         ingester->stop();
         
         srs_trace("reload stop ingester, vhost=%s, id=%s", vhost.c_str(), ingester->uri().c_str());
-            
+        
         srs_freep(ingester);
         
         // remove the item from ingesters.
@@ -544,7 +565,7 @@ int SrsIngester::on_reload_ingest_added(string vhost, string ingest_id)
     }
     
     srs_trace("reload add ingester, "
-        "vhost=%s, id=%s", vhost.c_str(), ingest_id.c_str());
+              "vhost=%s, id=%s", vhost.c_str(), ingest_id.c_str());
     
     return ret;
 }
@@ -552,17 +573,17 @@ int SrsIngester::on_reload_ingest_added(string vhost, string ingest_id)
 int SrsIngester::on_reload_ingest_updated(string vhost, string ingest_id)
 {
     int ret = ERROR_SUCCESS;
-
+    
     if ((ret = on_reload_ingest_removed(vhost, ingest_id)) != ERROR_SUCCESS) {
         return ret;
     }
-
+    
     if ((ret = on_reload_ingest_added(vhost, ingest_id)) != ERROR_SUCCESS) {
         return ret;
     }
     
     srs_trace("reload updated ingester, "
-        "vhost=%s, id=%s", vhost.c_str(), ingest_id.c_str());
+              "vhost=%s, id=%s", vhost.c_str(), ingest_id.c_str());
     
     return ret;
 }

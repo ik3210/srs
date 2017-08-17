@@ -1,25 +1,25 @@
-/*
-The MIT License (MIT)
-
-Copyright (c) 2013-2015 SRS(ossrs)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
+/**
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2013-2017 OSSRS(winlin)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
 #include <srs_protocol_utility.hpp>
 
@@ -41,42 +41,14 @@ using namespace std;
 #include <srs_rtmp_stack.hpp>
 #include <srs_protocol_io.hpp>
 
-void srs_discovery_tc_url(
-    string tcUrl, 
-    string& schema, string& host, string& vhost, 
-    string& app, int& port, string& param
-) {
-    size_t pos = std::string::npos;
-    std::string url = tcUrl;
-    
-    if ((pos = url.find("://")) != std::string::npos) {
-        schema = url.substr(0, pos);
-        url = url.substr(schema.length() + 3);
-        srs_info("discovery schema=%s", schema.c_str());
-    }
-    
-    if ((pos = url.find("/")) != std::string::npos) {
-        host = url.substr(0, pos);
-        url = url.substr(host.length() + 1);
-        srs_info("discovery host=%s", host.c_str());
-    }
-
-    port = SRS_CONSTS_RTMP_DEFAULT_PORT;
-    if ((pos = host.find(":")) != std::string::npos) {
-        srs_parse_hostport(host, host, port);
-        srs_info("discovery host=%s, port=%s", host.c_str(), port.c_str());
-    }
-
-    if (url.empty()) {
-        app = SRS_CONSTS_RTMP_DEFAULT_APP;
-    } else {
-        app = url;
-    }
-
-    vhost = host;
-    srs_vhost_resolve(vhost, app, param);
-}
-
+/**
+ * resolve the vhost in query string
+ * @pram vhost, update the vhost if query contains the vhost.
+ * @param app, may contains the vhost in query string format:
+ *   app?vhost=request_vhost
+ *   app...vhost...request_vhost
+ * @param param, the query, for example, ?vhost=xxx
+ */
 void srs_vhost_resolve(string& vhost, string& app, string& param)
 {
     // get original param
@@ -107,6 +79,63 @@ void srs_vhost_resolve(string& vhost, string& app, string& param)
     }
     
     /* others */
+}
+
+void srs_discovery_tc_url(
+                          string tcUrl,
+                          string& schema, string& host, string& vhost,
+                          string& app, int& port, string& param
+                          ) {
+    size_t pos = std::string::npos;
+    std::string url = tcUrl;
+    
+    if ((pos = url.find("://")) != std::string::npos) {
+        schema = url.substr(0, pos);
+        url = url.substr(schema.length() + 3);
+        srs_info("discovery schema=%s", schema.c_str());
+    }
+    
+    if ((pos = url.find("/")) != std::string::npos) {
+        host = url.substr(0, pos);
+        url = url.substr(host.length() + 1);
+        srs_info("discovery host=%s", host.c_str());
+    }
+    
+    port = SRS_CONSTS_RTMP_DEFAULT_PORT;
+    if ((pos = host.find(":")) != std::string::npos) {
+        srs_parse_hostport(host, host, port);
+        srs_info("discovery host=%s, port=%d", host.c_str(), port);
+    }
+    
+    if (url.empty()) {
+        app = SRS_CONSTS_RTMP_DEFAULT_APP;
+    } else {
+        app = url;
+    }
+    
+    vhost = host;
+    srs_vhost_resolve(vhost, app, param);
+}
+
+void srs_parse_query_string(string q, map<string,string>& query)
+{
+    // query string flags.
+    static vector<string> flags;
+    if (flags.empty()) {
+        flags.push_back("=");
+        flags.push_back(",");
+        flags.push_back("&&");
+        flags.push_back("&");
+        flags.push_back(";");
+    }
+    
+    vector<string> kvs = srs_string_split(q, flags);
+    for (int i = 0; i < (int)kvs.size(); i+=2) {
+        string k = kvs.at(i);
+        string v = (i < (int)kvs.size() - 1)? kvs.at(i+1):"";
+        
+        query[k] = v;
+    }
 }
 
 void srs_random_generate(char* bytes, int size)
@@ -141,66 +170,59 @@ string srs_generate_tc_url(string ip, string vhost, string app, int port, string
     
     tcUrl += "/";
     tcUrl += app;
-    tcUrl += param;
+    if (!param.empty()) {
+        tcUrl += "?" + param;
+    }
     
     return tcUrl;
 }
 
-/**
-* compare the memory in bytes.
-*/
-bool srs_bytes_equals(void* pa, void* pb, int size)
+string srs_generate_normal_tc_url(string ip, string vhost, string app, int port, string param)
 {
-    u_int8_t* a = (u_int8_t*)pa;
-    u_int8_t* b = (u_int8_t*)pb;
-    
-    if (!a && !b) {
-        return true;
-    }
-    
-    if (!a || !b) {
-        return false;
-    }
-    
-    for(int i = 0; i < size; i++){
-        if(a[i] != b[i]){
-            return false;
-        }
-    }
-
-    return true;
+    return "rtmp://" + vhost + ":" + srs_int2str(port) + "/" + app + (param.empty() ? "" : "?" + param);
 }
 
-int srs_do_rtmp_create_msg(char type, u_int32_t timestamp, char* data, int size, int stream_id, SrsSharedPtrMessage** ppmsg)
+string srs_generate_via_tc_url(string ip, string vhost, string app, int port, string param)
+{
+    return "rtmp://" + ip + ":" + srs_int2str(port) + "/" + vhost + "/" + app + (param.empty() ? "" : "?" + param);
+}
+
+string srs_generate_vis_tc_url(string ip, string vhost, string app, int port, string param)
+{
+    return "rtmp://" + ip + ":" + srs_int2str(port) + "/" + app + (param.empty() ? "" : "?" + param);
+}
+
+template<typename T>
+int srs_do_rtmp_create_msg(char type, uint32_t timestamp, char* data, int size, int stream_id, T** ppmsg)
 {
     int ret = ERROR_SUCCESS;
     
     *ppmsg = NULL;
-    SrsSharedPtrMessage* msg = NULL;
+    T* msg = NULL;
     
-    if (type == SrsCodecFlvTagAudio) {
+    if (type == SrsFrameTypeAudio) {
         SrsMessageHeader header;
         header.initialize_audio(size, timestamp, stream_id);
         
-        msg = new SrsSharedPtrMessage();
+        msg = new T();
         if ((ret = msg->create(&header, data, size)) != ERROR_SUCCESS) {
             srs_freep(msg);
             return ret;
         }
-    } else if (type == SrsCodecFlvTagVideo) {
+    } else if (type == SrsFrameTypeVideo) {
         SrsMessageHeader header;
         header.initialize_video(size, timestamp, stream_id);
         
-        msg = new SrsSharedPtrMessage();
+        msg = new T();
         if ((ret = msg->create(&header, data, size)) != ERROR_SUCCESS) {
             srs_freep(msg);
             return ret;
         }
-    } else if (type == SrsCodecFlvTagScript) {
+    } else if (type == SrsFrameTypeScript) {
         SrsMessageHeader header;
         header.initialize_amf0_script(size, stream_id);
         
-        msg = new SrsSharedPtrMessage();
+        msg = new T();
         if ((ret = msg->create(&header, data, size)) != ERROR_SUCCESS) {
             srs_freep(msg);
             return ret;
@@ -210,22 +232,35 @@ int srs_do_rtmp_create_msg(char type, u_int32_t timestamp, char* data, int size,
         srs_error("rtmp unknown tag type=%#x. ret=%d", type, ret);
         return ret;
     }
-
+    
     *ppmsg = msg;
-
+    
     return ret;
 }
 
-int srs_rtmp_create_msg(char type, u_int32_t timestamp, char* data, int size, int stream_id, SrsSharedPtrMessage** ppmsg)
+int srs_rtmp_create_msg(char type, uint32_t timestamp, char* data, int size, int stream_id, SrsSharedPtrMessage** ppmsg)
 {
     int ret = ERROR_SUCCESS;
-
+    
     // only when failed, we must free the data.
     if ((ret = srs_do_rtmp_create_msg(type, timestamp, data, size, stream_id, ppmsg)) != ERROR_SUCCESS) {
         srs_freepa(data);
         return ret;
     }
+    
+    return ret;
+}
 
+int srs_rtmp_create_msg(char type, uint32_t timestamp, char* data, int size, int stream_id, SrsCommonMessage** ppmsg)
+{
+    int ret = ERROR_SUCCESS;
+    
+    // only when failed, we must free the data.
+    if ((ret = srs_do_rtmp_create_msg(type, timestamp, data, size, stream_id, ppmsg)) != ERROR_SUCCESS) {
+        srs_freepa(data);
+        return ret;
+    }
+    
     return ret;
 }
 
@@ -240,7 +275,7 @@ string srs_generate_stream_url(string vhost, string app, string stream)
     url += app;
     url += "/";
     url += stream;
-
+    
     return url;
 }
 
@@ -267,7 +302,9 @@ string srs_generate_rtmp_url(string server, int port, string vhost, string app, 
         ss << "...vhost..." << vhost;
     }
     
-    ss << "/" << stream;
+    if (!stream.empty()) {
+        ss << "/" << stream;
+    }
     
     return ss.str();
 }
@@ -324,5 +361,22 @@ string srs_join_vector_string(vector<string>& vs, string separator)
     }
     
     return str;
+}
+
+bool srs_is_ipv4(string domain)
+{
+    for (int i = 0; i < (int)domain.length(); i++) {
+        char ch = domain.at(i);
+        if (ch == '.') {
+            continue;
+        }
+        if (ch >= '0' && ch <= '9') {
+            continue;
+        }
+        
+        return false;
+    }
+    
+    return true;
 }
 

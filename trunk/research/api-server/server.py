@@ -2,7 +2,7 @@
 '''
 The MIT License (MIT)
 
-Copyright (c) 2013-2015 SRS(ossrs)
+Copyright (c) 2013-2016 SRS(ossrs)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
@@ -117,7 +117,7 @@ class RESTClients(object):
         except Exception, ex:
             code = Error.system_parse_json
             trace("parse the request to json failed, req=%s, ex=%s, code=%s"%(req, ex, code))
-            return str(code)
+            return json.dumps({"code": int(code), "data": None})
 
         action = json_req["action"]
         if action == "on_connect":
@@ -128,7 +128,7 @@ class RESTClients(object):
             trace("invalid request action: %s"%(json_req["action"]))
             code = Error.request_invalid_action
 
-        return str(code)
+        return json.dumps({"code": int(code), "data": None})
 
     def OPTIONS(self, *args, **kwargs):
         enable_crossdomain()
@@ -204,7 +204,7 @@ class RESTStreams(object):
         except Exception, ex:
             code = Error.system_parse_json
             trace("parse the request to json failed, req=%s, ex=%s, code=%s"%(req, ex, code))
-            return str(code)
+            return json.dumps({"code": int(code), "data": None})
 
         action = json_req["action"]
         if action == "on_publish":
@@ -215,7 +215,7 @@ class RESTStreams(object):
             trace("invalid request action: %s"%(json_req["action"]))
             code = Error.request_invalid_action
 
-        return str(code)
+        return json.dumps({"code": int(code), "data": None})
 
     def OPTIONS(self, *args, **kwargs):
         enable_crossdomain()
@@ -284,7 +284,7 @@ class RESTDvrs(object):
         except Exception, ex:
             code = Error.system_parse_json
             trace("parse the request to json failed, req=%s, ex=%s, code=%s"%(req, ex, code))
-            return str(code)
+            return json.dumps({"code": int(code), "data": None})
 
         action = json_req["action"]
         if action == "on_dvr":
@@ -293,7 +293,7 @@ class RESTDvrs(object):
             trace("invalid request action: %s"%(json_req["action"]))
             code = Error.request_invalid_action
 
-        return str(code)
+        return json.dumps({"code": int(code), "data": None})
 
     def OPTIONS(self, *args, **kwargs):
         enable_crossdomain()
@@ -405,7 +405,7 @@ class RESTHls(object):
         except Exception, ex:
             code = Error.system_parse_json
             trace("parse the request to json failed, req=%s, ex=%s, code=%s"%(req, ex, code))
-            return str(code)
+            return json.dumps({"code": int(code), "data": None})
 
         action = json_req["action"]
         if action == "on_hls":
@@ -414,7 +414,7 @@ class RESTHls(object):
             trace("invalid request action: %s"%(json_req["action"]))
             code = Error.request_invalid_action
 
-        return str(code)
+        return json.dumps({"code": int(code), "data": None})
 
     def OPTIONS(self, *args, **kwargs):
         enable_crossdomain()
@@ -481,7 +481,7 @@ class RESTSessions(object):
         except Exception, ex:
             code = Error.system_parse_json
             trace("parse the request to json failed, req=%s, ex=%s, code=%s"%(req, ex, code))
-            return str(code)
+            return json.dumps({"code": int(code), "data": None})
 
         action = json_req["action"]
         if action == "on_play":
@@ -492,7 +492,7 @@ class RESTSessions(object):
             trace("invalid request action: %s"%(json_req["action"]))
             code = Error.request_invalid_action
 
-        return str(code)
+        return json.dumps({"code": int(code), "data": None})
 
     def OPTIONS(self, *args, **kwargs):
         enable_crossdomain()
@@ -529,6 +529,7 @@ class ArmServer:
         self.ip = None
         self.device_id = None
         self.summaries = None
+        self.devices = None
         
         self.public_ip = cherrypy.request.remote.ip
         self.heartbeat = time.time()
@@ -547,6 +548,7 @@ class ArmServer:
         data["ip"] = self.ip
         data["device_id"] = self.device_id
         data["summaries"] = self.summaries
+        data["devices"] = self.devices
         data["public_ip"] = self.public_ip
         data["heartbeat"] = self.heartbeat
         data["heartbeat_h"] = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(self.heartbeat))
@@ -611,6 +613,8 @@ class RESTServers(object):
             node.ip = json_req["ip"]
             if "summaries" in json_req:
                 node.summaries = json_req["summaries"]
+            if "devices" in json_req:
+                node.devices = json_req["devices"]
             node.device_id = device_id
             node.public_ip = cherrypy.request.remote.ip
             node.heartbeat = time.time()
@@ -799,7 +803,7 @@ class RESTSnapshots(object):
         except Exception, ex:
             code = Error.system_parse_json
             trace("parse the request to json failed, req=%s, ex=%s, code=%s"%(req, ex, code))
-            return str(code)
+            return json.dumps({"code": int(code), "data": None})
 
         action = json_req["action"]
         if action == "on_publish":
@@ -810,7 +814,7 @@ class RESTSnapshots(object):
             trace("invalid request action: %s"%(json_req["action"]))
             code = Error.request_invalid_action
 
-        return str(code)
+        return json.dumps({"code": int(code), "data": None})
 
     def OPTIONS(self, *args, **kwargs):
         enable_crossdomain()
@@ -882,7 +886,7 @@ if __name__ != "__main__":
 
 # check the user options
 if len(sys.argv) <= 1:
-    print "SRS api callback server, Copyright (c) 2013-2015 SRS(ossrs)"
+    print "SRS api callback server, Copyright (c) 2013-2016 SRS(ossrs)"
     print "Usage: python %s <port>"%(sys.argv[0])
     print "    port: the port to listen at."
     print "For example:"

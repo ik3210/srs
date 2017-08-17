@@ -1,32 +1,28 @@
-/*
-The MIT License (MIT)
-
-Copyright (c) 2013-2015 SRS(ossrs)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
+/**
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2013-2017 OSSRS(winlin)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
 #ifndef SRS_KERNEL_CONSTS_HPP
 #define SRS_KERNEL_CONSTS_HPP
-
-/*
-#include <srs_kernel_consts.hpp>
-*/
 
 #include <srs_core.hpp>
 
@@ -52,69 +48,75 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define SRS_CONSTS_RTMP_PROTOCOL_CHUNK_SIZE 128
 
 /**
-* 6. Chunking
-* The chunk size is configurable. It can be set using a control
-* message(Set Chunk Size) as described in section 7.1. The maximum
-* chunk size can be 65536 bytes and minimum 128 bytes. Larger values
-* reduce CPU usage, but also commit to larger writes that can delay
-* other content on lower bandwidth connections. Smaller chunks are not
-* good for high-bit rate streaming. Chunk size is maintained
-* independently for each direction.
-*/
+ * 6. Chunking
+ * The chunk size is configurable. It can be set using a control
+ * message(Set Chunk Size) as described in section 7.1. The maximum
+ * chunk size can be 65536 bytes and minimum 128 bytes. Larger values
+ * reduce CPU usage, but also commit to larger writes that can delay
+ * other content on lower bandwidth connections. Smaller chunks are not
+ * good for high-bit rate streaming. Chunk size is maintained
+ * independently for each direction.
+ */
 #define SRS_CONSTS_RTMP_MIN_CHUNK_SIZE 128
 #define SRS_CONSTS_RTMP_MAX_CHUNK_SIZE 65536
 
- 
-// the following is the timeout for rtmp protocol, 
+
+// the following is the timeout for rtmp protocol,
 // to avoid death connection.
 
+// Never timeout in ms
+// @remake Rename from SRS_CONSTS_NO_TIMEOUT
+// @see ST_UTIME_NO_TIMEOUT
+#define SRS_CONSTS_NO_TMMS ((int64_t) -1LL)
+
 // the common io timeout, for both recv and send.
-#define SRS_CONSTS_RTMP_TIMEOUT_US (int64_t)(30*1000*1000LL)
+// TODO: FIXME: use ms for timeout.
+#define SRS_CONSTS_RTMP_TMMS (30*1000)
 
 // the timeout to wait for client control message,
 // if timeout, we generally ignore and send the data to client,
 // generally, it's the pulse time for data seding.
 // @remark, recomment to 500ms.
-#define SRS_CONSTS_RTMP_PULSE_TIMEOUT_US (int64_t)(500*1000LL)
+#define SRS_CONSTS_RTMP_PULSE_TMMS (500)
 
 /**
-* max rtmp header size:
-*     1bytes basic header,
-*     11bytes message header,
-*     4bytes timestamp header,
-* that is, 1+11+4=16bytes.
-*/
+ * max rtmp header size:
+ *     1bytes basic header,
+ *     11bytes message header,
+ *     4bytes timestamp header,
+ * that is, 1+11+4=16bytes.
+ */
 #define SRS_CONSTS_RTMP_MAX_FMT0_HEADER_SIZE 16
 /**
-* max rtmp header size:
-*     1bytes basic header,
-*     4bytes timestamp header,
-* that is, 1+4=5bytes.
-*/
+ * max rtmp header size:
+ *     1bytes basic header,
+ *     4bytes timestamp header,
+ * that is, 1+4=5bytes.
+ */
 // always use fmt0 as cache.
 #define SRS_CONSTS_RTMP_MAX_FMT3_HEADER_SIZE 5
 
 /**
-* for performance issue, 
-* the iovs cache, @see https://github.com/ossrs/srs/issues/194
-* iovs cache for multiple messages for each connections.
-* suppose the chunk size is 64k, each message send in a chunk which needs only 2 iovec,
-* so the iovs max should be (SRS_PERF_MW_MSGS * 2)
-*
-* @remark, SRS will realloc when the iovs not enough.
-*/
+ * for performance issue,
+ * the iovs cache, @see https://github.com/ossrs/srs/issues/194
+ * iovs cache for multiple messages for each connections.
+ * suppose the chunk size is 64k, each message send in a chunk which needs only 2 iovec,
+ * so the iovs max should be (SRS_PERF_MW_MSGS * 2)
+ *
+ * @remark, SRS will realloc when the iovs not enough.
+ */
 #define SRS_CONSTS_IOVS_MAX (SRS_PERF_MW_MSGS * 2)
 /**
-* for performance issue, 
-* the c0c3 cache, @see https://github.com/ossrs/srs/issues/194
-* c0c3 cache for multiple messages for each connections.
-* each c0 <= 16byes, suppose the chunk size is 64k,
-* each message send in a chunk which needs only a c0 header,
-* so the c0c3 cache should be (SRS_PERF_MW_MSGS * 16)
-*
-* @remark, SRS will try another loop when c0c3 cache dry, for we cannot realloc it.
-*       so we use larger c0c3 cache, that is (SRS_PERF_MW_MSGS * 32)
-*/
+ * for performance issue,
+ * the c0c3 cache, @see https://github.com/ossrs/srs/issues/194
+ * c0c3 cache for multiple messages for each connections.
+ * each c0 <= 16byes, suppose the chunk size is 64k,
+ * each message send in a chunk which needs only a c0 header,
+ * so the c0c3 cache should be (SRS_PERF_MW_MSGS * 16)
+ *
+ * @remark, SRS will try another loop when c0c3 cache dry, for we cannot realloc it.
+ *       so we use larger c0c3 cache, that is (SRS_PERF_MW_MSGS * 32)
+ */
 #define SRS_CONSTS_C0C3_HEADERS_MAX (SRS_PERF_MW_MSGS * 32)
 
 ///////////////////////////////////////////////////////////
@@ -133,13 +135,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 // signal defines.
 // reload the config file and apply new config.
 #define SRS_SIGNAL_RELOAD SIGHUP
-// terminate the srs with dispose to detect memory leak for gmc.
-#define SRS_SIGNAL_DISPOSE SIGUSR2
-// persistence the config in memory to config file.
-// @see https://github.com/ossrs/srs/issues/319#issuecomment-134993922
-#define SRS_SIGNAL_PERSISTENCE_CONFIG SIGUSR1
+// reopen the log file.
+#define SRS_SIGNAL_REOPEN_LOG SIGUSR1
 // srs should gracefully quit, do dispose then exit.
 #define SRS_SIGNAL_GRACEFULLY_QUIT SIGTERM
+
+// application level signals.
+// persistence the config in memory to config file.
+// @see https://github.com/ossrs/srs/issues/319#issuecomment-134993922
+// @remark we actually don't handle the signal for it's not a valid os signal.
+#define SRS_SIGNAL_PERSISTENCE_CONFIG 1000
 
 ///////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////
@@ -213,13 +218,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ///////////////////////////////////////////////////////////
 // HTTP consts values
 ///////////////////////////////////////////////////////////
+// the default http port.
+#define SRS_CONSTS_HTTP_DEFAULT_PORT 80
 // linux path seprator
 #define SRS_CONSTS_HTTP_PATH_SEP '/'
 // query string seprator
 #define SRS_CONSTS_HTTP_QUERY_SEP '?'
 
 // the default recv timeout.
-#define SRS_HTTP_RECV_TIMEOUT_US 60 * 1000 * 1000
+#define SRS_HTTP_RECV_TMMS (60 * 1000)
 
 // 6.1.1 Status Code and Reason Phrase
 #define SRS_CONSTS_HTTP_Continue                       100
@@ -404,7 +411,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define SRS_CONSTS_KAFKA_DEFAULT_PORT 9092
 
 // the common io timeout, for both recv and send.
-#define SRS_CONSTS_KAFKA_TIMEOUT_US (int64_t)(30*1000*1000LL)
+#define SRS_CONSTS_KAFKA_TMMS (30*1000)
 
 #endif
 

@@ -1,7 +1,7 @@
 /*
 The MIT License (MIT)
 
-Copyright (c) 2013-2015 SRS(ossrs)
+Copyright (c) 2013-2017 OSSRS(winlin)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
@@ -42,7 +42,7 @@ MockEmptyIO::~MockEmptyIO()
 {
 }
 
-bool MockEmptyIO::is_never_timeout(int64_t /*timeout_us*/)
+bool MockEmptyIO::is_never_timeout(int64_t /*tm*/)
 {
     return true;
 }
@@ -57,7 +57,7 @@ int MockEmptyIO::write(void* /*buf*/, size_t /*size*/, ssize_t* /*nwrite*/)
     return ERROR_SUCCESS;
 }
 
-void MockEmptyIO::set_recv_timeout(int64_t /*timeout_us*/)
+void MockEmptyIO::set_recv_timeout(int64_t /*tm*/)
 {
 }
 
@@ -71,7 +71,7 @@ int64_t MockEmptyIO::get_recv_bytes()
     return -1;
 }
 
-void MockEmptyIO::set_send_timeout(int64_t /*timeout_us*/)
+void MockEmptyIO::set_send_timeout(int64_t /*tm*/)
 {
 }
 
@@ -97,17 +97,17 @@ int MockEmptyIO::read(void* /*buf*/, size_t /*size*/, ssize_t* /*nread*/)
 
 MockBufferIO::MockBufferIO()
 {
-    recv_timeout = send_timeout = ST_UTIME_NO_TIMEOUT;
-    recv_bytes = send_bytes = 0;
+    rtm = stm = SRS_CONSTS_NO_TMMS;
+    rbytes = sbytes = 0;
 }
 
 MockBufferIO::~MockBufferIO()
 {
 }
 
-bool MockBufferIO::is_never_timeout(int64_t timeout_us)
+bool MockBufferIO::is_never_timeout(int64_t tm)
 {
-    return (int64_t)ST_UTIME_NO_TIMEOUT == timeout_us;
+    return tm == SRS_CONSTS_NO_TMMS;
 }
 
 int MockBufferIO::read_fully(void* buf, size_t size, ssize_t* nread)
@@ -117,7 +117,7 @@ int MockBufferIO::read_fully(void* buf, size_t size, ssize_t* nread)
     }
     memcpy(buf, in_buffer.bytes(), size);
     
-    recv_bytes += size;
+    rbytes += size;
     if (nread) {
         *nread = size;
     }
@@ -127,7 +127,7 @@ int MockBufferIO::read_fully(void* buf, size_t size, ssize_t* nread)
 
 int MockBufferIO::write(void* buf, size_t size, ssize_t* nwrite)
 {
-    send_bytes += size;
+    sbytes += size;
     if (nwrite) {
         *nwrite = size;
     }
@@ -135,34 +135,34 @@ int MockBufferIO::write(void* buf, size_t size, ssize_t* nwrite)
     return ERROR_SUCCESS;
 }
 
-void MockBufferIO::set_recv_timeout(int64_t timeout_us)
+void MockBufferIO::set_recv_timeout(int64_t tm)
 {
-    recv_timeout = timeout_us;
+    rtm = tm;
 }
 
 int64_t MockBufferIO::get_recv_timeout()
 {
-    return recv_timeout;
+    return rtm;
 }
 
 int64_t MockBufferIO::get_recv_bytes()
 {
-    return recv_bytes;
+    return rbytes;
 }
 
-void MockBufferIO::set_send_timeout(int64_t timeout_us)
+void MockBufferIO::set_send_timeout(int64_t tm)
 {
-    send_timeout = timeout_us;
+    stm = tm;
 }
 
 int64_t MockBufferIO::get_send_timeout()
 {
-    return send_timeout;
+    return stm;
 }
 
 int64_t MockBufferIO::get_send_bytes()
 {
-    return send_bytes;
+    return sbytes;
 }
 
 int MockBufferIO::writev(const iovec *iov, int iov_size, ssize_t* nwrite)
@@ -180,6 +180,8 @@ int MockBufferIO::writev(const iovec *iov, int iov_size, ssize_t* nwrite)
         total += writen;
     }
     
+    sbytes += total;
+    
     if (nwrite) {
         *nwrite = total;
     }
@@ -195,7 +197,7 @@ int MockBufferIO::read(void* buf, size_t size, ssize_t* nread)
     size_t available = srs_min(in_buffer.length(), (int)size);
     memcpy(buf, in_buffer.bytes(), available);
     
-    recv_bytes += available;
+    rbytes += available;
     if (nread) {
         *nread = available;
     }
@@ -424,39 +426,6 @@ VOID TEST(ProtocolHandshakeTest, BytesEqual)
 }
 
 /**
-* resolve vhost from tcUrl.
-*/
-VOID TEST(ProtocolUtilityTest, VhostResolve)
-{
-    std::string vhost = "vhost";
-    std::string app = "app";
-    std::string param;
-    srs_vhost_resolve(vhost, app, param);
-    EXPECT_STREQ("vhost", vhost.c_str());
-    EXPECT_STREQ("app", app.c_str());
-    
-    app = "app?vhost=changed";
-    srs_vhost_resolve(vhost, app, param);
-    EXPECT_STREQ("changed", vhost.c_str());
-    EXPECT_STREQ("app", app.c_str());
-    
-    app = "app?vhost=changed1&&query=true";
-    srs_vhost_resolve(vhost, app, param);
-    EXPECT_STREQ("changed1", vhost.c_str());
-    EXPECT_STREQ("app", app.c_str());
-    
-    app = "app?other=true&&vhost=changed2&&query=true";
-    srs_vhost_resolve(vhost, app, param);
-    EXPECT_STREQ("changed2", vhost.c_str());
-    EXPECT_STREQ("app", app.c_str());
-    
-    app = "app...other...true...vhost...changed3...query...true";
-    srs_vhost_resolve(vhost, app, param);
-    EXPECT_STREQ("changed3", vhost.c_str());
-    EXPECT_STREQ("app", app.c_str());
-}
-
-/**
 * discovery tcUrl to schema/vhost/host/port/app
 */
 VOID TEST(ProtocolUtilityTest, DiscoveryTcUrl)
@@ -563,8 +532,8 @@ VOID TEST(ProtocolStackTest, ProtocolTimeout)
     MockBufferIO bio;
     SrsProtocol proto(&bio);
     
-    EXPECT_TRUE((int64_t)ST_UTIME_NO_TIMEOUT == proto.get_recv_timeout());
-    EXPECT_TRUE((int64_t)ST_UTIME_NO_TIMEOUT == proto.get_send_timeout());
+    EXPECT_TRUE(SRS_CONSTS_NO_TMMS == proto.get_recv_timeout());
+    EXPECT_TRUE(SRS_CONSTS_NO_TMMS == proto.get_send_timeout());
     
     proto.set_recv_timeout(10);
     EXPECT_TRUE(10 == proto.get_recv_timeout());
@@ -4643,114 +4612,6 @@ VOID TEST(ProtocolStackTest, ProtocolSendVMessage)
 }
 
 /**
-* send a SrsConnectAppPacket packet
-*/
-VOID TEST(ProtocolStackTest, ProtocolSendSrsConnectAppPacket)
-{
-    MockBufferIO bio;
-    SrsProtocol proto(&bio);
-    
-    SrsConnectAppPacket* pkt = new SrsConnectAppPacket();
-    pkt->command_object = SrsAmf0Any::object();
-    pkt->args = SrsAmf0Any::object();
-    
-    pkt->command_object->set("version", SrsAmf0Any::str("1.0.0"));
-    pkt->command_object->set("build", SrsAmf0Any::number(150));
-    SrsAmf0Object* data = SrsAmf0Any::object();
-    pkt->command_object->set("data", data);
-    
-    data->set("server", SrsAmf0Any::str("SRS"));
-    data->set("signature", SrsAmf0Any::str("ossrs"));
-    
-    pkt->args->set("info", SrsAmf0Any::str("NetStream.Status.Info"));
-    pkt->args->set("desc", SrsAmf0Any::str("connected"));
-    pkt->args->set("data", SrsAmf0Any::ecma_array());
-    
-    EXPECT_TRUE(ERROR_SUCCESS == proto.send_and_free_packet(pkt, 0));
-    char buf[] = {
-        (char)0x03, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0xb2, (char)0x14,
-        (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x02, (char)0x00, (char)0x07, (char)0x63,
-        (char)0x6f, (char)0x6e, (char)0x6e, (char)0x65, (char)0x63, (char)0x74, (char)0x00, (char)0x3f,
-        (char)0xf0, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x03,
-        (char)0x00, (char)0x07, (char)0x76, (char)0x65, (char)0x72, (char)0x73, (char)0x69, (char)0x6f,
-        (char)0x6e, (char)0x02, (char)0x00, (char)0x05, (char)0x31, (char)0x2e, (char)0x30, (char)0x2e,
-        (char)0x30, (char)0x00, (char)0x05, (char)0x62, (char)0x75, (char)0x69, (char)0x6c, (char)0x64,
-        (char)0x00, (char)0x40, (char)0x62, (char)0xc0, (char)0x00, (char)0x00, (char)0x00, (char)0x00,
-        (char)0x00, (char)0x00, (char)0x04, (char)0x64, (char)0x61, (char)0x74, (char)0x61, (char)0x03,
-        (char)0x00, (char)0x06, (char)0x73, (char)0x65, (char)0x72, (char)0x76, (char)0x65, (char)0x72,
-        (char)0x02, (char)0x00, (char)0x03, (char)0x53, (char)0x52, (char)0x53, (char)0x00, (char)0x09,
-        (char)0x73, (char)0x69, (char)0x67, (char)0x6e, (char)0x61, (char)0x74, (char)0x75, (char)0x72,
-        (char)0x65, (char)0x02, (char)0x00, (char)0x12, (char)0x73, (char)0x69, (char)0x6d, (char)0x70,
-        (char)0x6c, (char)0x65, (char)0x2d, (char)0x72, (char)0x74, (char)0x6d, (char)0x70, (char)0x2d,
-        (char)0x73, (char)0x65, (char)0x72, (char)0x76, (char)0x65, (char)0x72, (char)0x00, (char)0x00,
-        (char)0x09, (char)0x00, (char)0x00, (char)0x09, (char)0x03, (char)0x00, (char)0x04, (char)0x69,
-        (char)0x6e, (char)0x66, (char)0x6f, (char)0x02, (char)0x00, (char)0x15, (char)0x4e, (char)0x65,
-        (char)0x74, (char)0x53, (char)0x74, (char)0x72, (char)0xc3, (char)0x65, (char)0x61, (char)0x6d,
-        (char)0x2e, (char)0x53, (char)0x74, (char)0x61, (char)0x74, (char)0x75, (char)0x73, (char)0x2e,
-        (char)0x49, (char)0x6e, (char)0x66, (char)0x6f, (char)0x00, (char)0x04, (char)0x64, (char)0x65,
-        (char)0x73, (char)0x63, (char)0x02, (char)0x00, (char)0x09, (char)0x63, (char)0x6f, (char)0x6e,
-        (char)0x6e, (char)0x65, (char)0x63, (char)0x74, (char)0x65, (char)0x64, (char)0x00, (char)0x04,
-        (char)0x64, (char)0x61, (char)0x74, (char)0x61, (char)0x08, (char)0x00, (char)0x00, (char)0x00,
-        (char)0x00, (char)0x00, (char)0x00, (char)0x09, (char)0x00, (char)0x00, (char)0x09
-    };
-    EXPECT_TRUE(srs_bytes_equals(bio.out_buffer.bytes(), buf, sizeof(buf)));
-}
-
-/**
-* send a SrsConnectAppResPacket packet
-*/
-VOID TEST(ProtocolStackTest, ProtocolSendSrsConnectAppResPacket)
-{
-    MockBufferIO bio;
-    SrsProtocol proto(&bio);
-    
-    SrsConnectAppResPacket* pkt = new SrsConnectAppResPacket();
-    pkt->props = SrsAmf0Any::object();
-    pkt->info = SrsAmf0Any::object();
-    
-    pkt->props->set("version", SrsAmf0Any::str("1.0.0"));
-    pkt->props->set("build", SrsAmf0Any::number(150));
-    SrsAmf0Object* data = SrsAmf0Any::object();
-    pkt->props->set("data", data);
-    
-    data->set("server", SrsAmf0Any::str("SRS"));
-    data->set("signature", SrsAmf0Any::str("ossrs"));
-    
-    pkt->info->set("info", SrsAmf0Any::str("NetStream.Status.Info"));
-    pkt->info->set("desc", SrsAmf0Any::str("connected"));
-    pkt->info->set("data", SrsAmf0Any::ecma_array());
-    
-    EXPECT_TRUE(ERROR_SUCCESS == proto.send_and_free_packet(pkt, 0));
-    char buf[] = {
-        (char)0x03, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0xb2, (char)0x14,
-        (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x02, (char)0x00, (char)0x07, (char)0x5f,
-        (char)0x72, (char)0x65, (char)0x73, (char)0x75, (char)0x6c, (char)0x74, (char)0x00, (char)0x3f,
-        (char)0xf0, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x03,
-        (char)0x00, (char)0x07, (char)0x76, (char)0x65, (char)0x72, (char)0x73, (char)0x69, (char)0x6f,
-        (char)0x6e, (char)0x02, (char)0x00, (char)0x05, (char)0x31, (char)0x2e, (char)0x30, (char)0x2e,
-        (char)0x30, (char)0x00, (char)0x05, (char)0x62, (char)0x75, (char)0x69, (char)0x6c, (char)0x64,
-        (char)0x00, (char)0x40, (char)0x62, (char)0xc0, (char)0x00, (char)0x00, (char)0x00, (char)0x00,
-        (char)0x00, (char)0x00, (char)0x04, (char)0x64, (char)0x61, (char)0x74, (char)0x61, (char)0x03,
-        (char)0x00, (char)0x06, (char)0x73, (char)0x65, (char)0x72, (char)0x76, (char)0x65, (char)0x72,
-        (char)0x02, (char)0x00, (char)0x03, (char)0x53, (char)0x52, (char)0x53, (char)0x00, (char)0x09,
-        (char)0x73, (char)0x69, (char)0x67, (char)0x6e, (char)0x61, (char)0x74, (char)0x75, (char)0x72,
-        (char)0x65, (char)0x02, (char)0x00, (char)0x12, (char)0x73, (char)0x69, (char)0x6d, (char)0x70,
-        (char)0x6c, (char)0x65, (char)0x2d, (char)0x72, (char)0x74, (char)0x6d, (char)0x70, (char)0x2d,
-        (char)0x73, (char)0x65, (char)0x72, (char)0x76, (char)0x65, (char)0x72, (char)0x00, (char)0x00,
-        (char)0x09, (char)0x00, (char)0x00, (char)0x09, (char)0x03, (char)0x00, (char)0x04, (char)0x69,
-        (char)0x6e, (char)0x66, (char)0x6f, (char)0x02, (char)0x00, (char)0x15, (char)0x4e, (char)0x65,
-        (char)0x74, (char)0x53, (char)0x74, (char)0x72, (char)0xc3, (char)0x65, (char)0x61, (char)0x6d,
-        (char)0x2e, (char)0x53, (char)0x74, (char)0x61, (char)0x74, (char)0x75, (char)0x73, (char)0x2e,
-        (char)0x49, (char)0x6e, (char)0x66, (char)0x6f, (char)0x00, (char)0x04, (char)0x64, (char)0x65,
-        (char)0x73, (char)0x63, (char)0x02, (char)0x00, (char)0x09, (char)0x63, (char)0x6f, (char)0x6e,
-        (char)0x6e, (char)0x65, (char)0x63, (char)0x74, (char)0x65, (char)0x64, (char)0x00, (char)0x04,
-        (char)0x64, (char)0x61, (char)0x74, (char)0x61, (char)0x08, (char)0x00, (char)0x00, (char)0x00,
-        (char)0x00, (char)0x00, (char)0x00, (char)0x09, (char)0x00, (char)0x00, (char)0x09
-    };
-    EXPECT_TRUE(srs_bytes_equals(bio.out_buffer.bytes(), buf, sizeof(buf)));
-}
-
-/**
 * send a SrsCallPacket packet
 */
 VOID TEST(ProtocolStackTest, ProtocolSendSrsCallPacket)
@@ -4933,36 +4794,6 @@ VOID TEST(ProtocolStackTest, ProtocolSendSrsPublishPacket)
         (char)0x02, (char)0x00, (char)0x0a, (char)0x6c, (char)0x69, (char)0x76, (char)0x65, (char)0x73,
         (char)0x74, (char)0x72, (char)0x65, (char)0x61, (char)0x6d, (char)0x02, (char)0x00, (char)0x04,
         (char)0x6c, (char)0x69, (char)0x76, (char)0x65
-    };
-    EXPECT_TRUE(srs_bytes_equals(bio.out_buffer.bytes(), buf, sizeof(buf)));
-}
-
-/**
-* send a SrsPlayPacket packet
-*/
-VOID TEST(ProtocolStackTest, ProtocolSendSrsPlayPacket)
-{
-    MockBufferIO bio;
-    SrsProtocol proto(&bio);
-    
-    SrsPlayPacket* pkt = new SrsPlayPacket();
-    pkt->command_name = "play";
-    pkt->command_object = SrsAmf0Any::null();
-    pkt->stream_name = "livestream";
-    pkt->start = 0;
-    pkt->duration = 0;
-    pkt->reset = true;
-    
-    EXPECT_TRUE(ERROR_SUCCESS == proto.send_and_free_packet(pkt, 0));
-    char buf[] = {
-        (char)0x05, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x32, (char)0x14,
-        (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x02, (char)0x00, (char)0x04, (char)0x70,
-        (char)0x6c, (char)0x61, (char)0x79, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00,
-        (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x05, (char)0x02, (char)0x00, (char)0x0a,
-        (char)0x6c, (char)0x69, (char)0x76, (char)0x65, (char)0x73, (char)0x74, (char)0x72, (char)0x65,
-        (char)0x61, (char)0x6d, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00,
-        (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x00,
-        (char)0x00, (char)0x00, (char)0x00, (char)0x00, (char)0x01, (char)0x01
     };
     EXPECT_TRUE(srs_bytes_equals(bio.out_buffer.bytes(), buf, sizeof(buf)));
 }

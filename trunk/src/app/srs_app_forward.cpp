@@ -1,25 +1,25 @@
-/*
-The MIT License (MIT)
-
-Copyright (c) 2013-2015 SRS(ossrs)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
+/**
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2013-2017 OSSRS(winlin)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
 #include <srs_app_forward.hpp>
 
@@ -47,28 +47,23 @@ using namespace std;
 #include <srs_kernel_utility.hpp>
 #include <srs_app_rtmp_conn.hpp>
 
-// when error, forwarder sleep for a while and retry.
-#define SRS_FORWARDER_SLEEP_US (int64_t)(3*1000*1000LL)
-
-SrsForwarder::SrsForwarder(SrsSource* s)
+SrsForwarder::SrsForwarder(SrsOriginHub* h)
 {
-    source = s;
+    hub = h;
     
     req = NULL;
     sh_video = sh_audio = NULL;
-
-    sdk = new SrsSimpleRtmpClient();
-    pthread = new SrsReusableThread2("forward", this, SRS_FORWARDER_SLEEP_US);
+    
+    sdk = NULL;
+    trd = new SrsDummyCoroutine();
     queue = new SrsMessageQueue();
     jitter = new SrsRtmpJitter();
 }
 
 SrsForwarder::~SrsForwarder()
 {
-    on_unpublish();
-    
     srs_freep(sdk);
-    srs_freep(pthread);
+    srs_freep(trd);
     srs_freep(queue);
     srs_freep(jitter);
     
@@ -98,6 +93,7 @@ void SrsForwarder::set_queue_size(double queue_size)
 int SrsForwarder::on_publish()
 {
     int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
     // discovery the server port and tcUrl from req and ep_forward.
     std::string server;
@@ -132,33 +128,37 @@ int SrsForwarder::on_publish()
     
     if (source_ep == dest_ep) {
         ret = ERROR_SYSTEM_FORWARD_LOOP;
-        srs_warn("forward loop detected. src=%s, dest=%s, ret=%d", 
-            source_ep.c_str(), dest_ep.c_str(), ret);
+        srs_warn("forward loop detected. src=%s, dest=%s, ret=%d",
+                 source_ep.c_str(), dest_ep.c_str(), ret);
         return ret;
     }
-    srs_trace("start forward %s to %s, tcUrl=%s, stream=%s", 
-        source_ep.c_str(), dest_ep.c_str(), tcUrl.c_str(),
-        req->stream.c_str());
+    srs_trace("start forward %s to %s, tcUrl=%s, stream=%s",
+              source_ep.c_str(), dest_ep.c_str(), tcUrl.c_str(),
+              req->stream.c_str());
     
-    if ((ret = pthread->start()) != ERROR_SUCCESS) {
-        srs_error("start srs thread failed. ret=%d", ret);
+    srs_freep(trd);
+    trd = new SrsSTCoroutine("forward", this);
+    if ((err = trd->start()) != srs_success) {
+        // TODO: FIXME: Use error
+        ret = srs_error_code(err);
+        srs_freep(err);
+        
         return ret;
     }
-    srs_trace("forward thread cid=%d, current_cid=%d", pthread->cid(), _srs_context->get_id());
     
     return ret;
 }
 
 void SrsForwarder::on_unpublish()
 {
-    pthread->stop();
+    trd->stop();
     sdk->close();
 }
 
 int SrsForwarder::on_meta_data(SrsSharedPtrMessage* shared_metadata)
 {
     int ret = ERROR_SUCCESS;
-
+    
     SrsSharedPtrMessage* metadata = shared_metadata->copy();
     
     // TODO: FIXME: config the jitter of Forwarder.
@@ -186,7 +186,7 @@ int SrsForwarder::on_audio(SrsSharedPtrMessage* shared_audio)
         return ret;
     }
     
-    if (SrsFlvCodec::audio_is_sequence_header(msg->payload, msg->size)) {
+    if (SrsFlvAudio::sh(msg->payload, msg->size)) {
         srs_freep(sh_audio);
         sh_audio = msg->copy();
     }
@@ -201,7 +201,7 @@ int SrsForwarder::on_audio(SrsSharedPtrMessage* shared_audio)
 int SrsForwarder::on_video(SrsSharedPtrMessage* shared_video)
 {
     int ret = ERROR_SUCCESS;
-
+    
     SrsSharedPtrMessage* msg = shared_video->copy();
     
     // TODO: FIXME: config the jitter of Forwarder.
@@ -210,7 +210,7 @@ int SrsForwarder::on_video(SrsSharedPtrMessage* shared_video)
         return ret;
     }
     
-    if (SrsFlvCodec::video_is_sequence_header(msg->payload, msg->size)) {
+    if (SrsFlvVideo::sh(msg->payload, msg->size)) {
         srs_freep(sh_video);
         sh_video = msg->copy();
     }
@@ -222,9 +222,33 @@ int SrsForwarder::on_video(SrsSharedPtrMessage* shared_video)
     return ret;
 }
 
-int SrsForwarder::cycle()
+// when error, forwarder sleep for a while and retry.
+#define SRS_FORWARDER_CIMS (3000)
+
+srs_error_t SrsForwarder::cycle()
+{
+    srs_error_t err = srs_success;
+    
+    while (true) {
+        if ((err = do_cycle()) != srs_success) {
+            srs_warn("Forwarder: Ignore error, %s", srs_error_desc(err).c_str());
+            srs_freep(err);
+        }
+        
+        if ((err = trd->pull()) != srs_success) {
+            return srs_error_wrap(err, "forwarder");
+        }
+    
+        srs_usleep(SRS_FORWARDER_CIMS * 1000);
+    }
+    
+    return err;
+}
+
+srs_error_t SrsForwarder::do_cycle()
 {
     int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
     std::string url;
     if (true) {
@@ -238,27 +262,28 @@ int SrsForwarder::cycle()
         url = srs_generate_rtmp_url(server, port, req->vhost, req->app, req->stream);
     }
     
-    int64_t cto = SRS_FORWARDER_SLEEP_US;
-    int64_t sto = SRS_CONSTS_RTMP_TIMEOUT_US;
-    if ((ret = sdk->connect(url, cto, sto)) != ERROR_SUCCESS) {
-        srs_warn("forward failed, url=%s, cto=%"PRId64", sto=%"PRId64". ret=%d", url.c_str(), cto, sto, ret);
-        return ret;
+    srs_freep(sdk);
+    int64_t cto = SRS_FORWARDER_CIMS;
+    int64_t sto = SRS_CONSTS_RTMP_TMMS;
+    sdk = new SrsSimpleRtmpClient(url, cto, sto);
+    
+    if ((ret = sdk->connect()) != ERROR_SUCCESS) {
+        return srs_error_new(ret, "sdk connect url=%s, cto=%" PRId64 ", sto=%" PRId64, url.c_str(), cto, sto);
     }
     
     if ((ret = sdk->publish()) != ERROR_SUCCESS) {
-        return ret;
+        return srs_error_new(ret, "sdk publish");
     }
     
-    if ((ret = source->on_forwarder_start(this)) != ERROR_SUCCESS) {
-        srs_error("callback the source to feed the sequence header failed. ret=%d", ret);
-        return ret;
+    if ((ret = hub->on_forwarder_start(this)) != ERROR_SUCCESS) {
+        return srs_error_new(ret, "notify hub start");
     }
     
     if ((ret = forward()) != ERROR_SUCCESS) {
-        return ret;
+        return srs_error_new(ret, "forward");
     }
     
-    return ret;
+    return err;
 }
 
 #define SYS_MAX_FORWARD_SEND_MSGS 128
@@ -266,11 +291,11 @@ int SrsForwarder::forward()
 {
     int ret = ERROR_SUCCESS;
     
-    sdk->set_recv_timeout(SRS_CONSTS_RTMP_PULSE_TIMEOUT_US);
+    sdk->set_recv_timeout(SRS_CONSTS_RTMP_PULSE_TMMS);
     
     SrsPithyPrint* pprint = SrsPithyPrint::create_forwarder();
     SrsAutoFree(SrsPithyPrint, pprint);
-
+    
     SrsMessageArray msgs(SYS_MAX_FORWARD_SEND_MSGS);
     
     // update sequence header
@@ -288,9 +313,17 @@ int SrsForwarder::forward()
         }
     }
     
-    while (!pthread->interrupted()) {
+    while (true) {
+        srs_error_t err = srs_success;
+        if ((err = trd->pull()) != srs_success) {
+            // TODO: FIXME: Use error
+            ret = srs_error_code(err);
+            srs_freep(err);
+            return ret;
+        }
+        
         pprint->elapse();
-
+        
         // read from client.
         if (true) {
             SrsCommonMessage* msg = NULL;
@@ -323,7 +356,7 @@ int SrsForwarder::forward()
             srs_verbose("no packets to forward.");
             continue;
         }
-    
+        
         // sendout messages, all messages are freed by send_and_free_messages().
         if ((ret = sdk->send_and_free_messages(msgs.msgs, count)) != ERROR_SUCCESS) {
             srs_error("forwarder messages to server failed. ret=%d", ret);

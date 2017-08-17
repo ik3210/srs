@@ -1,29 +1,27 @@
-/*
-The MIT License (MIT)
-
-Copyright (c) 2013-2015 SRS(ossrs)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
+/**
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2013-2017 OSSRS(winlin)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
 #include <srs_app_http_api.hpp>
-
-#ifdef SRS_AUTO_HTTP_API
 
 #include <sstream>
 #include <stdlib.h>
@@ -46,10 +44,12 @@ using namespace std;
 #include <srs_kernel_consts.hpp>
 #include <srs_app_server.hpp>
 #include <srs_protocol_amf0.hpp>
+#include <srs_protocol_utility.hpp>
 
-int srs_api_response_jsonp(ISrsHttpResponseWriter* w, string callback, string data)
+srs_error_t srs_api_response_jsonp(ISrsHttpResponseWriter* w, string callback, string data)
 {
     int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
     SrsHttpHeader* h = w->header();
     
@@ -57,26 +57,26 @@ int srs_api_response_jsonp(ISrsHttpResponseWriter* w, string callback, string da
     h->set_content_type("text/javascript");
     
     if (!callback.empty() && (ret = w->write((char*)callback.data(), (int)callback.length())) != ERROR_SUCCESS) {
-        return ret;
+        return srs_error_new(ret, "write jsonp callback");
     }
     
     static char* c0 = (char*)"(";
     if ((ret = w->write(c0, 1)) != ERROR_SUCCESS) {
-        return ret;
+        return srs_error_new(ret, "write jsonp left token");
     }
     if ((ret = w->write((char*)data.data(), (int)data.length())) != ERROR_SUCCESS) {
-        return ret;
+        return srs_error_new(ret, "write jsonp data");
     }
     
     static char* c1 = (char*)")";
     if ((ret = w->write(c1, 1)) != ERROR_SUCCESS) {
-        return ret;
+        return srs_error_new(ret, "write jsonp right token");
     }
     
-    return ret;
+    return err;
 }
 
-int srs_api_response_jsonp_code(ISrsHttpResponseWriter* w, string callback, int code)
+srs_error_t srs_api_response_jsonp_code(ISrsHttpResponseWriter* w, string callback, int code)
 {
     SrsJsonObject* obj = SrsJsonAny::object();
     SrsAutoFree(SrsJsonObject, obj);
@@ -86,17 +86,34 @@ int srs_api_response_jsonp_code(ISrsHttpResponseWriter* w, string callback, int 
     return srs_api_response_jsonp(w, callback, obj->dumps());
 }
 
-int srs_api_response_json(ISrsHttpResponseWriter* w, string data)
+srs_error_t srs_api_response_jsonp_code(ISrsHttpResponseWriter* w, string callback, srs_error_t err)
 {
+    SrsJsonObject* obj = SrsJsonAny::object();
+    SrsAutoFree(SrsJsonObject, obj);
+    
+    obj->set("code", SrsJsonAny::integer(srs_error_code(err)));
+    
+    return srs_api_response_jsonp(w, callback, obj->dumps());
+}
+
+srs_error_t srs_api_response_json(ISrsHttpResponseWriter* w, string data)
+{
+    int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
+    
     SrsHttpHeader* h = w->header();
     
     h->set_content_length(data.length());
     h->set_content_type("application/json");
     
-    return w->write((char*)data.data(), (int)data.length());
+    if ((ret = w->write((char*)data.data(), (int)data.length())) != ERROR_SUCCESS) {
+        return srs_error_new(ret, "write json");
+    }
+    
+    return err;
 }
 
-int srs_api_response_json_code(ISrsHttpResponseWriter* w, int code)
+srs_error_t srs_api_response_json_code(ISrsHttpResponseWriter* w, int code)
 {
     SrsJsonObject* obj = SrsJsonAny::object();
     SrsAutoFree(SrsJsonObject, obj);
@@ -106,7 +123,17 @@ int srs_api_response_json_code(ISrsHttpResponseWriter* w, int code)
     return srs_api_response_json(w, obj->dumps());
 }
 
-int srs_api_response(ISrsHttpResponseWriter* w, ISrsHttpMessage* r, std::string json)
+srs_error_t srs_api_response_json_code(ISrsHttpResponseWriter* w, srs_error_t code)
+{
+    SrsJsonObject* obj = SrsJsonAny::object();
+    SrsAutoFree(SrsJsonObject, obj);
+    
+    obj->set("code", SrsJsonAny::integer(srs_error_code(code)));
+    
+    return srs_api_response_json(w, obj->dumps());
+}
+
+srs_error_t srs_api_response(ISrsHttpResponseWriter* w, ISrsHttpMessage* r, std::string json)
 {
     // no jsonp, directly response.
     if (!r->is_jsonp()) {
@@ -118,7 +145,7 @@ int srs_api_response(ISrsHttpResponseWriter* w, ISrsHttpMessage* r, std::string 
     return srs_api_response_jsonp(w, callback, json);
 }
 
-int srs_api_response_code(ISrsHttpResponseWriter* w, ISrsHttpMessage* r, int code)
+srs_error_t srs_api_response_code(ISrsHttpResponseWriter* w, ISrsHttpMessage* r, int code)
 {
     // no jsonp, directly response.
     if (!r->is_jsonp()) {
@@ -130,6 +157,27 @@ int srs_api_response_code(ISrsHttpResponseWriter* w, ISrsHttpMessage* r, int cod
     return srs_api_response_jsonp_code(w, callback, code);
 }
 
+// @remark we will free the code.
+srs_error_t srs_api_response_code(ISrsHttpResponseWriter* w, ISrsHttpMessage* r, srs_error_t code)
+{
+    srs_error_t err = srs_success;
+    
+    // no jsonp, directly response.
+    if (!r->is_jsonp()) {
+        err = srs_api_response_json_code(w, code);
+    } else {
+        // jsonp, get function name from query("callback")
+        string callback = r->query_get("callback");
+        err = srs_api_response_jsonp_code(w, callback, code);
+    }
+    
+    if (code != srs_success) {
+        srs_warn("error %s", srs_error_desc(code).c_str());
+        srs_freep(code);
+    }
+    return err;
+}
+
 SrsGoApiRoot::SrsGoApiRoot()
 {
 }
@@ -138,7 +186,7 @@ SrsGoApiRoot::~SrsGoApiRoot()
 {
 }
 
-int SrsGoApiRoot::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiRoot::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -152,7 +200,7 @@ int SrsGoApiRoot::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
     obj->set("urls", urls);
     
     urls->set("api", SrsJsonAny::str("the api root"));
-        
+    
     return srs_api_response(w, r, obj->dumps());
 }
 
@@ -164,7 +212,7 @@ SrsGoApiApi::~SrsGoApiApi()
 {
 }
 
-int SrsGoApiApi::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiApi::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -190,7 +238,7 @@ SrsGoApiV1::~SrsGoApiV1()
 {
 }
 
-int SrsGoApiV1::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiV1::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -236,7 +284,7 @@ SrsGoApiVersion::~SrsGoApiVersion()
 {
 }
 
-int SrsGoApiVersion::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiVersion::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -265,10 +313,15 @@ SrsGoApiSummaries::~SrsGoApiSummaries()
 {
 }
 
-int SrsGoApiSummaries::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiSummaries::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
+    SrsStatistic* stat = SrsStatistic::instance();
+    
     SrsJsonObject* obj = SrsJsonAny::object();
     SrsAutoFree(SrsJsonObject, obj);
+    
+    obj->set("code", SrsJsonAny::integer(ERROR_SUCCESS));
+    obj->set("server", SrsJsonAny::integer(stat->server_id()));
     
     srs_api_dump_summaries(obj);
     
@@ -283,7 +336,7 @@ SrsGoApiRusages::~SrsGoApiRusages()
 {
 }
 
-int SrsGoApiRusages::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiRusages::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -328,7 +381,7 @@ SrsGoApiSelfProcStats::~SrsGoApiSelfProcStats()
 {
 }
 
-int SrsGoApiSelfProcStats::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiSelfProcStats::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -405,7 +458,7 @@ SrsGoApiSystemProcStats::~SrsGoApiSystemProcStats()
 {
 }
 
-int SrsGoApiSystemProcStats::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiSystemProcStats::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -444,7 +497,7 @@ SrsGoApiMemInfos::~SrsGoApiMemInfos()
 {
 }
 
-int SrsGoApiMemInfos::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiMemInfos::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -484,7 +537,7 @@ SrsGoApiAuthors::~SrsGoApiAuthors()
 {
 }
 
-int SrsGoApiAuthors::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiAuthors::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -501,7 +554,6 @@ int SrsGoApiAuthors::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
     data->set("license", SrsJsonAny::str(RTMP_SIG_SRS_LICENSE));
     data->set("copyright", SrsJsonAny::str(RTMP_SIG_SRS_COPYRIGHT));
     data->set("authors", SrsJsonAny::str(RTMP_SIG_SRS_AUTHROS));
-    data->set("contributors_link", SrsJsonAny::str(RTMP_SIG_SRS_CONTRIBUTORS_URL));
     data->set("contributors", SrsJsonAny::str(SRS_AUTO_CONSTRIBUTORS));
     
     return srs_api_response(w, r, obj->dumps());
@@ -515,7 +567,7 @@ SrsGoApiFeatures::~SrsGoApiFeatures()
 {
 }
 
-int SrsGoApiFeatures::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiFeatures::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -541,36 +593,16 @@ int SrsGoApiFeatures::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 #else
     features->set("ssl", SrsJsonAny::boolean(false));
 #endif
-#ifdef SRS_AUTO_HLS
     features->set("hls", SrsJsonAny::boolean(true));
-#else
-    features->set("hls", SrsJsonAny::boolean(false));
-#endif
 #ifdef SRS_AUTO_HDS
     features->set("hds", SrsJsonAny::boolean(true));
 #else
     features->set("hds", SrsJsonAny::boolean(false));
 #endif
-#ifdef SRS_AUTO_HTTP_CALLBACK
     features->set("callback", SrsJsonAny::boolean(true));
-#else
-    features->set("callback", SrsJsonAny::boolean(false));
-#endif
-#ifdef SRS_AUTO_HTTP_API
     features->set("api", SrsJsonAny::boolean(true));
-#else
-    features->set("api", SrsJsonAny::boolean(false));
-#endif
-#ifdef SRS_AUTO_HTTP_SERVER
     features->set("httpd", SrsJsonAny::boolean(true));
-#else
-    features->set("httpd", SrsJsonAny::boolean(false));
-#endif
-#ifdef SRS_AUTO_DVR
     features->set("dvr", SrsJsonAny::boolean(true));
-#else
-    features->set("dvr", SrsJsonAny::boolean(false));
-#endif
 #ifdef SRS_AUTO_TRANSCODE
     features->set("transcode", SrsJsonAny::boolean(true));
 #else
@@ -633,7 +665,7 @@ SrsGoApiRequests::~SrsGoApiRequests()
 {
 }
 
-int SrsGoApiRequests::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiRequests::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     SrsStatistic* stat = SrsStatistic::instance();
     
@@ -667,7 +699,6 @@ int SrsGoApiRequests::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
     data->set("headers", server);
     
     server->set("sigature", SrsJsonAny::str(RTMP_SIG_SRS_KEY));
-    server->set("name", SrsJsonAny::str(RTMP_SIG_SRS_NAME));
     server->set("version", SrsJsonAny::str(RTMP_SIG_SRS_VERSION));
     server->set("link", SrsJsonAny::str(RTMP_SIG_SRS_URL));
     server->set("time", SrsJsonAny::integer(srs_get_system_time_ms()));
@@ -683,7 +714,7 @@ SrsGoApiVhosts::~SrsGoApiVhosts()
 {
 }
 
-int SrsGoApiVhosts::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiVhosts::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     int ret = ERROR_SUCCESS;
     
@@ -737,7 +768,7 @@ SrsGoApiStreams::~SrsGoApiStreams()
 {
 }
 
-int SrsGoApiStreams::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiStreams::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     int ret = ERROR_SUCCESS;
     
@@ -791,7 +822,7 @@ SrsGoApiClients::~SrsGoApiClients()
 {
 }
 
-int SrsGoApiClients::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiClients::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     int ret = ERROR_SUCCESS;
     
@@ -819,7 +850,11 @@ int SrsGoApiClients::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
             SrsJsonArray* data = SrsJsonAny::array();
             obj->set("clients", data);
             
-            if ((ret = stat->dumps_clients(data, 0, 10)) != ERROR_SUCCESS) {
+            std::string rstart = r->query_get("start");
+            std::string rcount = r->query_get("count");
+            int start = srs_max(0, atoi(rstart.c_str()));
+            int count = srs_max(10, atoi(rcount.c_str()));
+            if ((ret = stat->dumps_clients(data, start, count)) != ERROR_SUCCESS) {
                 return srs_api_response_code(w, r, ret);
             }
         } else {
@@ -863,9 +898,10 @@ SrsGoApiRaw::~SrsGoApiRaw()
     _srs_config->unsubscribe(this);
 }
 
-int SrsGoApiRaw::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiRaw::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
     std::string rpc = r->query_get("rpc");
     
@@ -913,7 +949,7 @@ int SrsGoApiRaw::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
         server->on_signal(SRS_SIGNAL_RELOAD);
         return srs_api_response_code(w, r, ret);
     }
-
+    
     // for rpc=query, to get the configs of server.
     //      @param scope the scope to query for config, it can be:
     //              global, the configs belongs to the root, donot includes any sub directives.
@@ -1024,7 +1060,7 @@ int SrsGoApiRaw::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
             && scope != "ff_log_dir" && scope != "srs_log_tank" && scope != "srs_log_level"
             && scope != "srs_log_file" && scope != "max_connections" && scope != "utc_time"
             && scope != "pithy_print_ms" && scope != "vhost" && scope != "dvr"
-        ) {
+            ) {
             ret = ERROR_SYSTEM_CONFIG_RAW_NOT_ALLOWED;
             srs_error("raw api query invalid scope=%s. ret=%d", scope.c_str(), ret);
             return srs_api_response_code(w, r, ret);
@@ -1140,9 +1176,8 @@ int SrsGoApiRaw::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
                 return srs_api_response_code(w, r, ret);
             }
             
-            if ((ret = _srs_config->raw_set_utc_time(srs_config_bool2switch(value), applied)) != ERROR_SUCCESS) {
-                srs_error("raw api update utc_time=%s failed. ret=%d", value.c_str(), ret);
-                return srs_api_response_code(w, r, ret);
+            if ((err = _srs_config->raw_set_utc_time(srs_config_bool2switch(value), applied)) != srs_success) {
+                return srs_api_response_code(w, r, srs_error_wrap(err, "raw api update utc_time=%s", value.c_str()));
             }
         } else if (scope == "pithy_print_ms") {
             int ppmv = ::atoi(value.c_str());
@@ -1278,7 +1313,7 @@ int SrsGoApiRaw::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
         return srs_api_response(w, r, obj->dumps());
     }
     
-    return ret;
+    return err;
 }
 
 int SrsGoApiRaw::on_reload_http_api_raw_api()
@@ -1299,17 +1334,17 @@ SrsGoApiError::~SrsGoApiError()
 {
 }
 
-int SrsGoApiError::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
+srs_error_t SrsGoApiError::serve_http(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
     return srs_api_response_code(w, r, 100);
 }
 
-SrsHttpApi::SrsHttpApi(IConnectionManager* cm, st_netfd_t fd, SrsHttpServeMux* m)
-    : SrsConnection(cm, fd)
+SrsHttpApi::SrsHttpApi(IConnectionManager* cm, srs_netfd_t fd, SrsHttpServeMux* m, string cip)
+: SrsConnection(cm, fd, cip)
 {
     mux = m;
+    cors = new SrsHttpCorsMux();
     parser = new SrsHttpParser();
-    crossdomain_required = false;
     
     _srs_config->subscribe(this);
 }
@@ -1317,6 +1352,7 @@ SrsHttpApi::SrsHttpApi(IConnectionManager* cm, st_netfd_t fd, SrsHttpServeMux* m
 SrsHttpApi::~SrsHttpApi()
 {
     srs_freep(parser);
+    srs_freep(cors);
     
     _srs_config->unsubscribe(this);
 }
@@ -1343,37 +1379,37 @@ void SrsHttpApi::cleanup()
     // TODO: FIXME: implements it
 }
 
-int SrsHttpApi::do_cycle()
+srs_error_t SrsHttpApi::do_cycle()
 {
     int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
     srs_trace("api get peer ip success. ip=%s", ip.c_str());
     
     // initialize parser
     if ((ret = parser->initialize(HTTP_REQUEST, true)) != ERROR_SUCCESS) {
-        srs_error("api initialize http parser failed. ret=%d", ret);
-        return ret;
+        return srs_error_new(ret, "init parser");
     }
-    
-    // underlayer socket
-    SrsStSocket skt(stfd);
     
     // set the recv timeout, for some clients never disconnect the connection.
     // @see https://github.com/ossrs/srs/issues/398
-    skt.set_recv_timeout(SRS_HTTP_RECV_TIMEOUT_US);
+    skt->set_recv_timeout(SRS_HTTP_RECV_TMMS);
     
-    // initialize the crossdomain
-    crossdomain_enabled = _srs_config->get_http_api_crossdomain();
+    // initialize the cors, which will proxy to mux.
+    bool crossdomain_enabled = _srs_config->get_http_api_crossdomain();
+    if ((err = cors->initialize(mux, crossdomain_enabled)) != srs_success) {
+        return srs_error_wrap(err, "init cors");
+    }
     
     // process http messages.
-    while(!disposed) {
+    while ((err = trd->pull()) == srs_success) {
         ISrsHttpMessage* req = NULL;
         
         // get a http message
-        if ((ret = parser->parse_message(&skt, this, &req)) != ERROR_SUCCESS) {
-            return ret;
+        if ((ret = parser->parse_message(skt, this, &req)) != ERROR_SUCCESS) {
+            return srs_error_new(ret, "parse message");
         }
-
+        
         // if SUCCESS, always NOT-NULL.
         srs_assert(req);
         
@@ -1381,77 +1417,58 @@ int SrsHttpApi::do_cycle()
         SrsAutoFree(ISrsHttpMessage, req);
         
         // ok, handle http request.
-        SrsHttpResponseWriter writer(&skt);
-        if ((ret = process_request(&writer, req)) != ERROR_SUCCESS) {
-            return ret;
+        SrsHttpResponseWriter writer(skt);
+        if ((err = process_request(&writer, req)) != srs_success) {
+            return srs_error_wrap(err, "process request");
         }
-
+        
         // read all rest bytes in request body.
         char buf[SRS_HTTP_READ_CACHE_BYTES];
         ISrsHttpResponseReader* br = req->body_reader();
         while (!br->eof()) {
             if ((ret = br->read(buf, SRS_HTTP_READ_CACHE_BYTES, NULL)) != ERROR_SUCCESS) {
-                return ret;
+                return srs_error_new(ret, "read response");
             }
         }
-
+        
         // donot keep alive, disconnect it.
         // @see https://github.com/ossrs/srs/issues/399
         if (!req->is_keep_alive()) {
             break;
         }
     }
-        
-    return ret;
+    
+    return err;
 }
 
-int SrsHttpApi::process_request(ISrsHttpResponseWriter* w, ISrsHttpMessage* r) 
+srs_error_t SrsHttpApi::process_request(ISrsHttpResponseWriter* w, ISrsHttpMessage* r)
 {
-    int ret = ERROR_SUCCESS;
+    srs_error_t err = srs_success;
     
-    srs_trace("HTTP %s %s, content-length=%"PRId64"", 
-        r->method_str().c_str(), r->url().c_str(), r->content_length());
+    SrsHttpMessage* hm = dynamic_cast<SrsHttpMessage*>(r);
+    srs_assert(hm);
     
-    // method is OPTIONS and enable crossdomain, required crossdomain header.
-    if (r->is_http_options() && _srs_config->get_http_api_crossdomain()) {
-        crossdomain_required = true;
-    }
-
-    // whenever crossdomain required, set crossdomain header.
-    if (crossdomain_required) {
-        w->header()->set("Access-Control-Allow-Origin", "*");
-        w->header()->set("Access-Control-Allow-Methods", "GET, POST, HEAD, PUT, DELETE");
-        w->header()->set("Access-Control-Allow-Headers", "Cache-Control,X-Proxy-Authorization,X-Requested-With,Content-Type");
-    }
-
-    // handle the http options.
-    if (r->is_http_options()) {
-        w->header()->set_content_length(0);
-        if (_srs_config->get_http_api_crossdomain()) {
-            w->write_header(SRS_CONSTS_HTTP_OK);
-        } else {
-            w->write_header(SRS_CONSTS_HTTP_MethodNotAllowed);
-        }
-        return w->final_request();
+    srs_trace("HTTP API %s %s, content-length=%" PRId64 ", chunked=%d/%d",
+        r->method_str().c_str(), r->url().c_str(), r->content_length(),
+        hm->is_chunked(), hm->is_infinite_chunked());
+    
+    // use cors server mux to serve http request, which will proxy to mux.
+    if ((err = cors->serve_http(w, r)) != srs_success) {
+        return srs_error_wrap(err, "mux serve");
     }
     
-    // use default server mux to serve http request.
-    if ((ret = mux->serve_http(w, r)) != ERROR_SUCCESS) {
-        if (!srs_is_client_gracefully_close(ret)) {
-            srs_error("serve http msg failed. ret=%d", ret);
-        }
-        return ret;
-    }
-    
-    return ret;
+    return err;
 }
 
-int SrsHttpApi::on_reload_http_api_crossdomain()
+srs_error_t SrsHttpApi::on_reload_http_api_crossdomain()
 {
-    crossdomain_enabled = _srs_config->get_http_api_crossdomain();
+    srs_error_t err = srs_success;
     
-    return ERROR_SUCCESS;
+    bool crossdomain_enabled = _srs_config->get_http_api_crossdomain();
+    if ((err = cors->initialize(mux, crossdomain_enabled)) != srs_success) {
+        return srs_error_wrap(err, "reload");
+    }
+    
+    return err;
 }
-
-#endif
 

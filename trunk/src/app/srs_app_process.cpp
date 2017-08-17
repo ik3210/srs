@@ -1,24 +1,24 @@
-/*
- The MIT License (MIT)
- 
- Copyright (c) 2013-2015 SRS(ossrs)
- 
- Permission is hereby granted, free of charge, to any person obtaining a copy of
- this software and associated documentation files (the "Software"), to deal in
- the Software without restriction, including without limitation the rights to
- use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
- the Software, and to permit persons to whom the Software is furnished to do so,
- subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in all
- copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
- FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
- COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
- IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+/**
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2013-2017 OSSRS(winlin)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include <srs_app_process.hpp>
@@ -41,6 +41,9 @@ using namespace std;
 #include <srs_kernel_log.hpp>
 #include <srs_app_config.hpp>
 #include <srs_app_utility.hpp>
+#include <srs_kernel_utility.hpp>
+#include <srs_protocol_utility.hpp>
+#include <srs_app_utility.hpp>
 
 SrsProcess::SrsProcess()
 {
@@ -51,6 +54,11 @@ SrsProcess::SrsProcess()
 
 SrsProcess::~SrsProcess()
 {
+}
+
+int SrsProcess::get_pid()
+{
+    return pid;
 }
 
 bool SrsProcess::started()
@@ -64,38 +72,102 @@ int SrsProcess::initialize(string binary, vector<string> argv)
     
     bin = binary;
     cli = "";
+    actual_cli = "";
     params.clear();
     
     for (int i = 0; i < (int)argv.size(); i++) {
         std::string ffp = argv[i];
-        cli += ffp;
-        if (i < (int)argv.size() - 1) {
-            cli += " ";
-        }
-    }
-    
-    for (int i = 0; i < (int)argv.size(); i++) {
-        std::string ffp = argv[i];
-        std::string nffp = (i < (int)argv.size() -1)? argv[i + 1] : "";
+        std::string nffp = (i < (int)argv.size() - 1)? argv[i + 1] : "";
+        std::string nnffp = (i < (int)argv.size() - 2)? argv[i + 2] : "";
         
-        // remove the stdout and stderr.
-        if (ffp == "1" && nffp == ">") {
-            if (i + 2 < (int)argv.size()) {
-                stdout_file = argv[i + 2];
-                i += 2;
-            }
-            continue;
-        } else if (ffp == "2" && nffp == ">") {
-            if (i + 2 < (int)argv.size()) {
-                stderr_file = argv[i + 2];
-                i += 2;
-            }
+        // >file
+        if (srs_string_starts_with(ffp, ">")) {
+            stdout_file = ffp.substr(1);
             continue;
         }
         
-        // startup params.
+        // 1>file
+        if (srs_string_starts_with(ffp, "1>")) {
+            stdout_file = ffp.substr(2);
+            continue;
+        }
+        
+        // 2>file
+        if (srs_string_starts_with(ffp, "2>")) {
+            stderr_file = ffp.substr(2);
+            continue;
+        }
+        
+        // 1 >X
+        if (ffp == "1" && srs_string_starts_with(nffp, ">")) {
+            if (nffp == ">") {
+                // 1 > file
+                if (!nnffp.empty()) {
+                    stdout_file = nnffp;
+                    i++;
+                }
+            } else {
+                // 1 >file
+                stdout_file = srs_string_trim_start(nffp, ">");
+            }
+            // skip the >
+            i++;
+            continue;
+        }
+        
+        // 2 >X
+        if (ffp == "2" && srs_string_starts_with(nffp, ">")) {
+            if (nffp == ">") {
+                // 2 > file
+                if (!nnffp.empty()) {
+                    stderr_file = nnffp;
+                    i++;
+                }
+            } else {
+                // 2 >file
+                stderr_file = srs_string_trim_start(nffp, ">");
+            }
+            // skip the >
+            i++;
+            continue;
+        }
+        
         params.push_back(ffp);
     }
+    
+    actual_cli = srs_join_vector_string(params, " ");
+    cli = srs_join_vector_string(argv, " ");
+    
+    return ret;
+}
+
+int srs_redirect_output(string from_file, int to_fd)
+{
+    int ret = ERROR_SUCCESS;
+    
+    // use default output.
+    if (from_file.empty()) {
+        return ret;
+    }
+    
+    // redirect the fd to file.
+    int fd = -1;
+    int flags = O_CREAT|O_WRONLY|O_APPEND;
+    mode_t mode = S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH;
+    
+    if ((fd = ::open(from_file.c_str(), flags, mode)) < 0) {
+        ret = ERROR_FORK_OPEN_LOG;
+        fprintf(stderr, "open process %d %s failed. ret=%d", to_fd, from_file.c_str(), ret);
+        exit(ret);
+    }
+    
+    if (dup2(fd, to_fd) < 0) {
+        ret = ERROR_FORK_DUP2_LOG;
+        srs_error("dup2 process %d failed. ret=%d", to_fd, ret);
+        exit(ret);
+    }
+    
+    ::close(fd);
     
     return ret;
 }
@@ -109,7 +181,7 @@ int SrsProcess::start()
     }
     
     // generate the argv of process.
-    srs_trace("fork process: %s", cli.c_str());
+    srs_info("fork process: %s", cli.c_str());
     
     // for log
     int cid = _srs_context->get_id();
@@ -118,11 +190,12 @@ int SrsProcess::start()
     // TODO: fork or vfork?
     if ((pid = fork()) < 0) {
         ret = ERROR_ENCODER_FORK;
-        srs_error("vfork process failed. ret=%d", ret);
+        srs_error("vfork process failed, cli=%s. ret=%d", cli.c_str(), ret);
         return ret;
     }
     
     // for osx(lldb) to debug the child process.
+    // user can use "lldb -p <pid>" to resume the parent or child process.
     //kill(0, SIGSTOP);
     
     // child process: ffmpeg encoder engine.
@@ -131,70 +204,45 @@ int SrsProcess::start()
         signal(SIGINT, SIG_IGN);
         signal(SIGTERM, SIG_IGN);
         
-        // redirect stdout to file.
-        if (!stdout_file.empty()) {
-            int stdout_fd = -1;
-            int flags = O_CREAT|O_WRONLY|O_APPEND;
-            mode_t mode = S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH;
-            
-            if ((stdout_fd = ::open(stdout_file.c_str(), flags, mode)) < 0) {
-                ret = ERROR_ENCODER_OPEN;
-                fprintf(stderr, "open process stdout %s failed. ret=%d", stdout_file.c_str(), ret);
-                exit(ret);
-            }
-            
-            if (dup2(stdout_fd, STDOUT_FILENO) < 0) {
-                ret = ERROR_ENCODER_DUP2;
-                srs_error("dup2 process stdout failed. ret=%d", ret);
-                exit(ret);
-            }
+        // for the stdin,
+        // should never close it or ffmpeg will error.
+        
+        // for the stdout, ignore when not specified.
+        // redirect stdout to file if possible.
+        if ((ret = srs_redirect_output(stdout_file, STDOUT_FILENO)) != ERROR_SUCCESS) {
+            return ret;
         }
         
-        // redirect stderr to file.
-        if (!stderr_file.empty()) {
-            int stderr_fd = -1;
-            int flags = O_CREAT|O_WRONLY|O_APPEND;
-            mode_t mode = S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH;
-            
-            if ((stderr_fd = ::open(stderr_file.c_str(), flags, mode)) < 0) {
-                ret = ERROR_ENCODER_OPEN;
-                fprintf(stderr, "open process stderr %s failed. ret=%d", stderr_file.c_str(), ret);
-                exit(ret);
-            }
-            
-            if (dup2(stderr_fd, STDERR_FILENO) < 0) {
-                ret = ERROR_ENCODER_DUP2;
-                srs_error("dup2 process stderr failed. ret=%d", ret);
-                exit(ret);
-            }
+        // for the stderr, ignore when not specified.
+        // redirect stderr to file if possible.
+        if ((ret = srs_redirect_output(stderr_file, STDERR_FILENO)) != ERROR_SUCCESS) {
+            return ret;
         }
         
-        // log basic info
+        // should never close the fd 3+, for it myabe used.
+        // for fd should close at exec, use fnctl to set it.
+        
+        // log basic info to stderr.
         if (true) {
             fprintf(stderr, "\n");
-            fprintf(stderr, "process parent pid=%d\n", ppid);
-            fprintf(stderr, "process parent cid=%d\n", cid);
-            fprintf(stderr, "process binary=%s\n", bin.c_str());
-            fprintf(stderr, "process cli: %s\n", cli.c_str());
-        }
-        
-        // close other fds
-        // TODO: do in right way.
-        for (int i = 3; i < 1024; i++) {
-            ::close(i);
+            fprintf(stderr, "process ppid=%d, cid=%d, pid=%d\n", ppid, cid, getpid());
+            fprintf(stderr, "process binary=%s, cli: %s\n", bin.c_str(), cli.c_str());
+            fprintf(stderr, "process actual cli: %s\n", actual_cli.c_str());
         }
         
         // memory leak in child process, it's ok.
-        char** charpv_params = new char*[params.size() + 1];
+        char** argv = new char*[params.size() + 1];
         for (int i = 0; i < (int)params.size(); i++) {
             std::string& p = params[i];
-            charpv_params[i] = (char*)p.data();
+            
+            // memory leak in child process, it's ok.
+            char* v = new char[p.length() + 1];
+            argv[i] = strcpy(v, p.data());
         }
-        // EOF: NULL
-        charpv_params[params.size()] = NULL;
+        argv[params.size()] = NULL;
         
-        // TODO: execv or execvp
-        ret = execv(bin.c_str(), charpv_params);
+        // use execv to start the program.
+        ret = execv(bin.c_str(), argv);
         if (ret < 0) {
             fprintf(stderr, "fork process failed, errno=%d(%s)", errno, strerror(errno));
         }
@@ -204,7 +252,8 @@ int SrsProcess::start()
     // parent.
     if (pid > 0) {
         is_started = true;
-        srs_trace("vfored process, pid=%d, bin=%s", pid, bin.c_str());
+        srs_trace("fored process, pid=%d, bin=%s, stdout=%s, stderr=%s, argv=%s",
+                  pid, bin.c_str(), stdout_file.c_str(), stderr_file.c_str(), actual_cli.c_str());
         return ret;
     }
     
@@ -238,7 +287,7 @@ int SrsProcess::cycle()
         return ret;
     }
     
-    srs_trace("process pid=%d terminate, restart it.", pid);
+    srs_trace("process pid=%d terminate, please restart it.", pid);
     is_started = false;
     
     return ret;
